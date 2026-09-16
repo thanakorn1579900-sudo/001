@@ -65,3 +65,12 @@ body {
 button, input { font: inherit; }
 
 ::selection { background: #b8e3d8; color: #102a35; }
+
+/* Questions and choices are intentionally not selectable while an exam is in progress. */
+.exam-protected,
+.exam-protected * {
+  -webkit-touch-callout: none;
+  -webkit-user-select: none;
+  -moz-user-select: none;
+  user-select: none;
+}

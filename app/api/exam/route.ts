@@ -1,8 +1,10 @@
-import { examQuestions } from "@/lib/exam-data";
+import { getExam } from "@/lib/exam-catalog";
+import { defaultExamSubjectId, isExamSubjectId } from "@/lib/exam-subjects";
 
 export const runtime = "edge";
 
 type Submission = {
+  subjectId?: unknown;
   name?: unknown;
   classLevel?: unknown;
   studentId?: unknown;
@@ -16,10 +18,16 @@ type Submission = {
 const cleanText = (value: unknown, maxLength: number) =>
   typeof value === "string" ? value.trim().slice(0, maxLength) : "";
 
-export async function GET() {
-  const questions = examQuestions.map(({ answer: _answer, ...question }) => question);
+const getSubjectId = (value: unknown) =>
+  typeof value === "string" && isExamSubjectId(value) ? value : defaultExamSubjectId;
+
+export async function GET(request: Request) {
+  const subjectId = getSubjectId(new URL(request.url).searchParams.get("subject"));
+  const exam = getExam(subjectId);
+  const questions = exam.questions.map(({ answer: _answer, ...question }) => question);
   return Response.json({
-    title: "แบบทดสอบงานอิเล็กทรอนิกส์รถยนต์เบื้องต้น",
+    subject: exam.subject,
+    title: exam.title,
     questions,
   });
 }
@@ -35,18 +43,20 @@ export async function POST(request: Request) {
   const name = cleanText(body.name, 120);
   const classLevel = cleanText(body.classLevel, 80);
   const studentId = cleanText(body.studentId, 80);
+  const subjectId = getSubjectId(body.subjectId);
+  const exam = getExam(subjectId);
   const answers = body.answers && typeof body.answers === "object" ? body.answers as Record<string, unknown> : {};
 
   if (!name || !classLevel || !studentId) {
     return Response.json({ error: "กรอกชื่อ ชั้น และรหัสนักศึกษาให้ครบ" }, { status: 400 });
   }
 
-  const answered = examQuestions.filter((question) => typeof answers[String(question.id)] === "string").length;
-  const score = examQuestions.reduce(
+  const answered = exam.questions.filter((question) => typeof answers[String(question.id)] === "string").length;
+  const score = exam.questions.reduce(
     (total, question) => total + (answers[String(question.id)] === question.answer ? 1 : 0),
     0,
   );
-  const total = examQuestions.length;
+  const total = exam.questions.length;
   const warnings = Math.max(0, Math.min(99, Number(body.warnings) || 0));
   const elapsedSeconds = Math.max(0, Math.min(86_400, Number(body.elapsedSeconds) || 0));
   const submittedAt = cleanText(body.submittedAt, 80) || new Date().toISOString();
@@ -55,6 +65,7 @@ export async function POST(request: Request) {
     name,
     classLevel,
     studentId,
+    subject: exam.subject.title,
     score,
     total,
     percent: Math.round((score / total) * 100),
@@ -77,7 +88,12 @@ export async function POST(request: Request) {
     const response = await fetch(endpoint, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify(payload),
+      body: JSON.stringify({
+        ...payload,
+        // The existing Google Apps Script stores classLevel in one column.
+        // Keep the selected subject visible in that sheet without requiring a script migration.
+        classLevel: `${classLevel} | ${exam.subject.title}`,
+      }),
     });
     if (!response.ok) throw new Error(`sheet response ${response.status}`);
     return Response.json({ ...payload, recorded: true });

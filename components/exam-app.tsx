@@ -30,10 +30,15 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Progress } from "@/components/ui/progress";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
+import { examSubjects, defaultExamSubjectId, isExamSubjectId, type ExamSubjectId } from "@/lib/exam-subjects";
 
 type Option = { label: string; text: string };
 type Question = { id: number; question: string; options: Option[] };
-type ExamData = { title: string; questions: Question[] };
+type ExamData = {
+  subject: { id: ExamSubjectId; title: string; description: string; questionCount: number };
+  title: string;
+  questions: Question[];
+};
 type Result = {
   score: number;
   total: number;
@@ -42,6 +47,7 @@ type Result = {
   warnings: number;
   elapsedSeconds: number;
   recorded: boolean;
+  subject?: string;
   message?: string;
 };
 
@@ -55,6 +61,7 @@ const formatDuration = (seconds: number) => {
 export function ExamApp() {
   const [exam, setExam] = useState<ExamData | null>(null);
   const [loadError, setLoadError] = useState("");
+  const [selectedSubjectId, setSelectedSubjectId] = useState<ExamSubjectId>(defaultExamSubjectId);
   const [screen, setScreen] = useState<"register" | "exam" | "result">("register");
   const [form, setForm] = useState({ name: "", classLevel: "", studentId: "" });
   const [answers, setAnswers] = useState<Record<string, string>>({});
@@ -73,7 +80,9 @@ export function ExamApp() {
 
   useEffect(() => {
     let cancelled = false;
-    fetch("/api/exam")
+    setExam(null);
+    setLoadError("");
+    fetch(`/api/exam?subject=${encodeURIComponent(selectedSubjectId)}`)
       .then(async (response) => {
         if (!response.ok) throw new Error("load failed");
         return response.json() as Promise<ExamData>;
@@ -81,7 +90,7 @@ export function ExamApp() {
       .then((data) => !cancelled && setExam(data))
       .catch(() => !cancelled && setLoadError("ไม่สามารถโหลดข้อสอบได้ กรุณาลองใหม่"));
     return () => { cancelled = true; };
-  }, []);
+  }, [selectedSubjectId]);
 
   useEffect(() => {
     if (screen !== "exam") return;
@@ -133,6 +142,8 @@ export function ExamApp() {
     document.addEventListener("cut", onRestrictedAction);
     document.addEventListener("paste", onRestrictedAction);
     document.addEventListener("dragstart", onRestrictedAction);
+    document.addEventListener("selectstart", onRestrictedAction);
+    document.addEventListener("drop", onRestrictedAction);
     window.addEventListener("beforeunload", onBeforeUnload);
     return () => {
       document.removeEventListener("visibilitychange", onVisibility);
@@ -143,17 +154,21 @@ export function ExamApp() {
       document.removeEventListener("cut", onRestrictedAction);
       document.removeEventListener("paste", onRestrictedAction);
       document.removeEventListener("dragstart", onRestrictedAction);
+      document.removeEventListener("selectstart", onRestrictedAction);
+      document.removeEventListener("drop", onRestrictedAction);
       window.removeEventListener("beforeunload", onBeforeUnload);
     };
   }, [submitting]);
 
   const answeredCount = useMemo(() => Object.keys(answers).length, [answers]);
+  const selectedSubject = examSubjects.find((subject) => subject.id === selectedSubjectId) ?? examSubjects[0];
+  const isExamLoading = !exam || exam.subject.id !== selectedSubjectId;
   const currentQuestion = exam?.questions[currentIndex];
   const progress = exam ? (answeredCount / exam.questions.length) * 100 : 0;
 
   const beginExam = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    if (!exam) return;
+    if (!exam || exam.subject.id !== selectedSubjectId) return;
     const name = form.name.trim();
     const classLevel = form.classLevel.trim();
     const studentId = form.studentId.trim();
@@ -193,7 +208,7 @@ export function ExamApp() {
       const response = await fetch("/api/exam", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ ...form, answers, warnings, elapsedSeconds: finalElapsed, startedAt, submittedAt: stoppedAt }),
+        body: JSON.stringify({ ...form, subjectId: selectedSubjectId, answers, warnings, elapsedSeconds: finalElapsed, startedAt, submittedAt: stoppedAt }),
       });
       const data = await response.json() as Result & { error?: string };
       if (!response.ok) throw new Error(data.error || "ส่งคำตอบไม่สำเร็จ");
@@ -213,7 +228,7 @@ export function ExamApp() {
   if (loadError) {
     return <Notice icon={<CircleAlert />} title="ยังเปิดข้อสอบไม่ได้" message={loadError} action="ลองโหลดใหม่" onAction={() => window.location.reload()} />;
   }
-  if (!exam) {
+  if (screen === "exam" && !exam) {
     return <Notice icon={<LoaderCircle className="animate-spin" />} title="กำลังเตรียมข้อสอบ" message="โปรดรอสักครู่" />;
   }
 
@@ -224,7 +239,8 @@ export function ExamApp() {
           <div className="bg-[#0e5965] px-6 py-8 text-white sm:px-10">
             <div className="flex items-center gap-3 text-sm font-semibold text-[#dff0ec]"><ClipboardCheck className="size-5" /> ส่งคำตอบแล้ว</div>
             <h1 className="mt-3 text-3xl font-bold tracking-tight">สรุปผลการสอบ</h1>
-            <p className="mt-2 text-base text-[#dff0ec]">{form.name} · {form.classLevel} · {form.studentId}</p>
+            <p className="mt-2 text-base text-[#dff0ec]">{result.subject ?? selectedSubject.title}</p>
+            <p className="mt-1 text-base text-[#dff0ec]">{form.name} · {form.classLevel} · {form.studentId}</p>
           </div>
           <div className="grid gap-5 p-6 sm:grid-cols-[1fr_1.3fr] sm:p-10">
             <div className="rounded-2xl bg-[#e6f2ef] p-6 text-center">
@@ -252,8 +268,8 @@ export function ExamApp() {
         <section className="mx-auto grid max-w-5xl overflow-hidden rounded-3xl border border-[#c5dcda] bg-white shadow-[0_24px_70px_rgb(18_60_69/12%)] lg:grid-cols-[1.02fr_0.98fr]">
           <div className="bg-[#0e5965] px-6 py-10 text-white sm:px-10 sm:py-14">
             <Badge className="border-[#75cbb8] bg-[#135f6b] px-3 py-1 text-sm text-[#e4faf4]" variant="outline"><ShieldCheck className="size-4" /> โหมดสอบ</Badge>
-            <h1 className="mt-6 text-3xl font-bold leading-tight tracking-tight sm:text-4xl">งานอิเล็กทรอนิกส์รถยนต์เบื้องต้น</h1>
-            <p className="mt-4 max-w-md text-base leading-7 text-[#dff0ec]">ข้อสอบปรนัย {exam.questions.length} ข้อ ระบบตรวจคะแนนหลังส่งคำตอบและบันทึกเหตุการณ์ระหว่างทำข้อสอบ</p>
+            <h1 className="mt-6 text-3xl font-bold leading-tight tracking-tight sm:text-4xl">{selectedSubject.title}</h1>
+            <p className="mt-4 max-w-md text-base leading-7 text-[#dff0ec]">{selectedSubject.description} · ข้อสอบปรนัย {selectedSubject.questionCount} ข้อ ระบบตรวจคะแนนหลังส่งคำตอบและบันทึกเหตุการณ์ระหว่างทำข้อสอบ</p>
             <div className="mt-10 border-t border-[#45909a] pt-7">
               <p className="text-sm font-semibold uppercase tracking-[0.12em] text-[#9cd8cb]">กติกาการสอบ</p>
               <ul className="mt-4 space-y-4 text-base text-[#edfafa]">
@@ -266,11 +282,26 @@ export function ExamApp() {
           <div className="p-6 sm:p-10">
             <div className="mb-7"><p className="text-sm font-semibold text-[#0e5965]">ลงชื่อเข้าสอบ</p><p className="mt-1 text-base text-[#526b73]">กรอกข้อมูลให้ครบก่อนเริ่มทำข้อสอบ</p></div>
             <form className="space-y-5" onSubmit={beginExam}>
+              <div className="space-y-3">
+                <Label>เลือกวิชาสอบ</Label>
+                <RadioGroup value={selectedSubjectId} onValueChange={(value) => {
+                  if (isExamSubjectId(value)) setSelectedSubjectId(value);
+                }} className="grid gap-3">
+                  {examSubjects.map((subject) => {
+                    const id = `subject-${subject.id}`;
+                    const isSelected = subject.id === selectedSubjectId;
+                    return <label key={subject.id} htmlFor={id} className={`flex cursor-pointer items-start gap-3 rounded-xl border p-4 transition ${isSelected ? "border-[#0e5965] bg-[#e7f4f1]" : "border-[#cfdddd] bg-white hover:border-[#95c9bf]"}`}>
+                      <RadioGroupItem value={subject.id} id={id} className="mt-0.5 border-[#6d9699] text-[#0e5965]" />
+                      <span><span className="block font-semibold text-[#173f47]">{subject.title}</span><span className="mt-1 block text-sm leading-5 text-[#526b73]">{subject.description} · {subject.questionCount} ข้อ</span></span>
+                    </label>;
+                  })}
+                </RadioGroup>
+              </div>
               <div className="space-y-2"><Label htmlFor="name">ชื่อ - นามสกุล</Label><Input id="name" required value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} placeholder="เช่น สมชาย ใจดี" className="h-11 bg-white text-base" /></div>
               <div className="space-y-2"><Label htmlFor="classLevel">ชั้น / ห้อง</Label><Input id="classLevel" required value={form.classLevel} onChange={(event) => setForm({ ...form, classLevel: event.target.value })} placeholder="เช่น ปวช. 2/1" className="h-11 bg-white text-base" /></div>
               <div className="space-y-2"><Label htmlFor="studentId">รหัสนักศึกษา</Label><Input id="studentId" required inputMode="numeric" value={form.studentId} onChange={(event) => setForm({ ...form, studentId: event.target.value })} placeholder="กรอกรหัสนักศึกษา" className="h-11 bg-white text-base" /></div>
               <div className="rounded-xl bg-[#edf5f4] px-4 py-3 text-sm leading-6 text-[#365860]">เมื่อกดเริ่มทำข้อสอบ ระบบจะขอเปิดเต็มหน้าจอ และตรวจจับการออกจากหน้าสอบ</div>
-              <Button type="submit" size="lg" className="h-12 w-full bg-[#0e5965] text-base hover:bg-[#094852]"><UserRoundCheck className="size-5" /> เริ่มทำข้อสอบ</Button>
+              <Button type="submit" size="lg" disabled={isExamLoading} className="h-12 w-full bg-[#0e5965] text-base hover:bg-[#094852] disabled:bg-[#5f7c82]">{isExamLoading ? <LoaderCircle className="size-5 animate-spin" /> : <UserRoundCheck className="size-5" />}{isExamLoading ? "กำลังเตรียมข้อสอบ" : "เริ่มทำข้อสอบ"}</Button>
             </form>
           </div>
         </section>
@@ -281,7 +312,7 @@ export function ExamApp() {
   if (!currentQuestion) return null;
   const selected = answers[String(currentQuestion.id)];
   return (
-    <main className="min-h-screen bg-[#f1f6f6]" onContextMenu={(event) => event.preventDefault()}>
+    <main className="exam-protected min-h-screen bg-[#f1f6f6]" onContextMenu={(event) => event.preventDefault()} onSelectStart={(event) => event.preventDefault()} onDragStart={(event) => event.preventDefault()}>
       <header className="sticky top-0 z-20 border-b border-[#bed4d4] bg-[#0e5965] text-white shadow-sm">
         <div className="mx-auto flex max-w-7xl items-center justify-between gap-4 px-4 py-3 sm:px-6">
           <div className="min-w-0"><p className="truncate text-sm font-semibold text-[#ccece4]">{exam.title}</p><p className="text-xs text-[#95d5c8]">ข้อ {currentIndex + 1} จาก {exam.questions.length}</p></div>
