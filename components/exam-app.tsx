@@ -1,0 +1,329 @@
+"use client";
+
+import { FormEvent, ReactNode, useEffect, useMemo, useRef, useState } from "react";
+import {
+  AlertTriangle,
+  ArrowLeft,
+  ArrowRight,
+  CheckCircle2,
+  CircleAlert,
+  ClipboardCheck,
+  Clock3,
+  DoorOpen,
+  Gauge,
+  LoaderCircle,
+  LockKeyhole,
+  ShieldCheck,
+  UserRoundCheck,
+} from "lucide-react";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Progress } from "@/components/ui/progress";
+import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
+
+type Option = { label: string; text: string };
+type Question = { id: number; question: string; options: Option[] };
+type ExamData = { title: string; questions: Question[] };
+type Result = {
+  score: number;
+  total: number;
+  percent: number;
+  answered: number;
+  warnings: number;
+  elapsedSeconds: number;
+  recorded: boolean;
+  message?: string;
+};
+
+const formatDuration = (seconds: number) => {
+  const h = Math.floor(seconds / 3600).toString().padStart(2, "0");
+  const m = Math.floor((seconds % 3600) / 60).toString().padStart(2, "0");
+  const s = Math.floor(seconds % 60).toString().padStart(2, "0");
+  return `${h}:${m}:${s}`;
+};
+
+export function ExamApp() {
+  const [exam, setExam] = useState<ExamData | null>(null);
+  const [loadError, setLoadError] = useState("");
+  const [screen, setScreen] = useState<"register" | "exam" | "result">("register");
+  const [form, setForm] = useState({ name: "", classLevel: "", studentId: "" });
+  const [answers, setAnswers] = useState<Record<string, string>>({});
+  const [currentIndex, setCurrentIndex] = useState(0);
+  const [startedAt, setStartedAt] = useState("");
+  const [elapsedSeconds, setElapsedSeconds] = useState(0);
+  const [warnings, setWarnings] = useState(0);
+  const [violation, setViolation] = useState("");
+  const [submitDialogOpen, setSubmitDialogOpen] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+  const [result, setResult] = useState<Result | null>(null);
+  const examActive = useRef(false);
+  const lastViolation = useRef(0);
+  const fullScreenExpected = useRef(false);
+  const startTime = useRef(0);
+
+  useEffect(() => {
+    let cancelled = false;
+    fetch("/api/exam")
+      .then(async (response) => {
+        if (!response.ok) throw new Error("load failed");
+        return response.json() as Promise<ExamData>;
+      })
+      .then((data) => !cancelled && setExam(data))
+      .catch(() => !cancelled && setLoadError("ไม่สามารถโหลดข้อสอบได้ กรุณาลองใหม่"));
+    return () => { cancelled = true; };
+  }, []);
+
+  useEffect(() => {
+    if (screen !== "exam") return;
+    const timer = window.setInterval(() => {
+      setElapsedSeconds(Math.max(0, Math.floor((Date.now() - startTime.current) / 1000)));
+    }, 1000);
+    return () => window.clearInterval(timer);
+  }, [screen]);
+
+  useEffect(() => {
+    const addViolation = (reason: string) => {
+      if (!examActive.current || submitting) return;
+      const now = Date.now();
+      if (now - lastViolation.current < 850) return;
+      lastViolation.current = now;
+      setWarnings((count) => count + 1);
+      setViolation(reason);
+    };
+    const onVisibility = () => {
+      if (document.hidden) addViolation("ตรวจพบการสลับแท็บหรือย่อหน้าต่างระหว่างทำข้อสอบ");
+    };
+    const onFullscreen = () => {
+      if (fullScreenExpected.current && !document.fullscreenElement) {
+        addViolation("ตรวจพบการออกจากโหมดเต็มหน้าจอ");
+      }
+    };
+    const onBeforeUnload = (event: BeforeUnloadEvent) => {
+      if (!examActive.current) return;
+      event.preventDefault();
+      event.returnValue = "";
+    };
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (!examActive.current) return;
+      const blocked = (event.ctrlKey || event.metaKey) && ["c", "v", "x", "p", "s", "u"].includes(event.key.toLowerCase());
+      if (blocked || event.key === "F12") {
+        event.preventDefault();
+        addViolation("การคัดลอก วาง บันทึก หรือเปิดเครื่องมือพัฒนาไม่อนุญาตระหว่างสอบ");
+      }
+    };
+    const onRestrictedAction = (event: Event) => {
+      if (!examActive.current) return;
+      event.preventDefault();
+    };
+    document.addEventListener("visibilitychange", onVisibility);
+    document.addEventListener("fullscreenchange", onFullscreen);
+    document.addEventListener("keydown", onKeyDown);
+    document.addEventListener("contextmenu", onRestrictedAction);
+    document.addEventListener("copy", onRestrictedAction);
+    document.addEventListener("cut", onRestrictedAction);
+    document.addEventListener("paste", onRestrictedAction);
+    document.addEventListener("dragstart", onRestrictedAction);
+    window.addEventListener("beforeunload", onBeforeUnload);
+    return () => {
+      document.removeEventListener("visibilitychange", onVisibility);
+      document.removeEventListener("fullscreenchange", onFullscreen);
+      document.removeEventListener("keydown", onKeyDown);
+      document.removeEventListener("contextmenu", onRestrictedAction);
+      document.removeEventListener("copy", onRestrictedAction);
+      document.removeEventListener("cut", onRestrictedAction);
+      document.removeEventListener("paste", onRestrictedAction);
+      document.removeEventListener("dragstart", onRestrictedAction);
+      window.removeEventListener("beforeunload", onBeforeUnload);
+    };
+  }, [submitting]);
+
+  const answeredCount = useMemo(() => Object.keys(answers).length, [answers]);
+  const currentQuestion = exam?.questions[currentIndex];
+  const progress = exam ? (answeredCount / exam.questions.length) * 100 : 0;
+
+  const beginExam = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (!exam) return;
+    const name = form.name.trim();
+    const classLevel = form.classLevel.trim();
+    const studentId = form.studentId.trim();
+    if (!name || !classLevel || !studentId) return;
+    const now = new Date();
+    examActive.current = true;
+    startTime.current = Date.now();
+    setStartedAt(now.toISOString());
+    setElapsedSeconds(0);
+    setScreen("exam");
+    try {
+      await document.documentElement.requestFullscreen();
+      fullScreenExpected.current = true;
+    } catch {
+      fullScreenExpected.current = false;
+      setViolation("เบราว์เซอร์ไม่อนุญาตโหมดเต็มหน้าจอ โปรดทำข้อสอบในหน้าต่างนี้ตลอดเวลา");
+    }
+  };
+
+  const resumeFullScreen = async () => {
+    try {
+      await document.documentElement.requestFullscreen();
+      fullScreenExpected.current = true;
+    } catch {
+      fullScreenExpected.current = false;
+    }
+    setViolation("");
+  };
+
+  const submitExam = async () => {
+    if (!exam || submitting) return;
+    setSubmitting(true);
+    setSubmitDialogOpen(false);
+    const stoppedAt = new Date().toISOString();
+    const finalElapsed = Math.max(0, Math.floor((Date.now() - startTime.current) / 1000));
+    try {
+      const response = await fetch("/api/exam", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ ...form, answers, warnings, elapsedSeconds: finalElapsed, startedAt, submittedAt: stoppedAt }),
+      });
+      const data = await response.json() as Result & { error?: string };
+      if (!response.ok) throw new Error(data.error || "ส่งคำตอบไม่สำเร็จ");
+      examActive.current = false;
+      fullScreenExpected.current = false;
+      if (document.fullscreenElement) await document.exitFullscreen().catch(() => undefined);
+      setElapsedSeconds(finalElapsed);
+      setResult(data);
+      setScreen("result");
+    } catch (error) {
+      setViolation(error instanceof Error ? error.message : "ส่งคำตอบไม่สำเร็จ กรุณาลองอีกครั้ง");
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  if (loadError) {
+    return <Notice icon={<CircleAlert />} title="ยังเปิดข้อสอบไม่ได้" message={loadError} action="ลองโหลดใหม่" onAction={() => window.location.reload()} />;
+  }
+  if (!exam) {
+    return <Notice icon={<LoaderCircle className="animate-spin" />} title="กำลังเตรียมข้อสอบ" message="โปรดรอสักครู่" />;
+  }
+
+  if (screen === "result" && result) {
+    return (
+      <main className="min-h-screen px-4 py-8 sm:px-6 sm:py-12">
+        <section className="mx-auto max-w-2xl overflow-hidden rounded-3xl border border-[#c5dcda] bg-white shadow-[0_24px_70px_rgb(18_60_69/12%)]">
+          <div className="bg-[#0e5965] px-6 py-8 text-white sm:px-10">
+            <div className="flex items-center gap-3 text-sm font-semibold text-[#dff0ec]"><ClipboardCheck className="size-5" /> ส่งคำตอบแล้ว</div>
+            <h1 className="mt-3 text-3xl font-bold tracking-tight">สรุปผลการสอบ</h1>
+            <p className="mt-2 text-base text-[#dff0ec]">{form.name} · {form.classLevel} · {form.studentId}</p>
+          </div>
+          <div className="grid gap-5 p-6 sm:grid-cols-[1fr_1.3fr] sm:p-10">
+            <div className="rounded-2xl bg-[#e6f2ef] p-6 text-center">
+              <p className="text-sm font-semibold text-[#315962]">คะแนน</p>
+              <p className="mt-2 text-5xl font-bold text-[#0e5965]">{result.score}<span className="text-2xl text-[#53727a]">/{result.total}</span></p>
+              <p className="mt-2 text-lg font-semibold text-[#315962]">{result.percent}%</p>
+            </div>
+            <div className="space-y-4 py-1 text-base text-[#365860]">
+              <p className="flex gap-3"><Clock3 className="mt-0.5 size-5 shrink-0 text-[#0e5965]" /> ใช้เวลา {formatDuration(result.elapsedSeconds)} น.</p>
+              <p className="flex gap-3"><Gauge className="mt-0.5 size-5 shrink-0 text-[#0e5965]" /> ตอบแล้ว {result.answered} จาก {result.total} ข้อ</p>
+              <p className="flex gap-3"><AlertTriangle className="mt-0.5 size-5 shrink-0 text-[#b45b24]" /> การเตือนระหว่างสอบ {result.warnings} ครั้ง</p>
+              <div className={`rounded-xl border px-4 py-3 text-sm font-medium ${result.recorded ? "border-[#9acfc3] bg-[#e9f6f1] text-[#17604f]" : "border-[#e9c48e] bg-[#fff6e5] text-[#8b511b]"}`}>
+                {result.recorded ? "บันทึกคะแนนลงตารางผลสอบแล้ว" : result.message}
+              </div>
+            </div>
+          </div>
+        </section>
+      </main>
+    );
+  }
+
+  if (screen === "register") {
+    return (
+      <main className="min-h-screen px-4 py-6 sm:px-6 sm:py-12">
+        <section className="mx-auto grid max-w-5xl overflow-hidden rounded-3xl border border-[#c5dcda] bg-white shadow-[0_24px_70px_rgb(18_60_69/12%)] lg:grid-cols-[1.02fr_0.98fr]">
+          <div className="bg-[#0e5965] px-6 py-10 text-white sm:px-10 sm:py-14">
+            <Badge className="border-[#75cbb8] bg-[#135f6b] px-3 py-1 text-sm text-[#e4faf4]" variant="outline"><ShieldCheck className="size-4" /> โหมดสอบ</Badge>
+            <h1 className="mt-6 text-3xl font-bold leading-tight tracking-tight sm:text-4xl">งานอิเล็กทรอนิกส์รถยนต์เบื้องต้น</h1>
+            <p className="mt-4 max-w-md text-base leading-7 text-[#dff0ec]">ข้อสอบปรนัย {exam.questions.length} ข้อ ระบบตรวจคะแนนหลังส่งคำตอบและบันทึกเหตุการณ์ระหว่างทำข้อสอบ</p>
+            <div className="mt-10 border-t border-[#45909a] pt-7">
+              <p className="text-sm font-semibold uppercase tracking-[0.12em] text-[#9cd8cb]">กติกาการสอบ</p>
+              <ul className="mt-4 space-y-4 text-base text-[#edfafa]">
+                <li className="flex gap-3"><LockKeyhole className="mt-0.5 size-5 shrink-0 text-[#f2b84b]" /> เริ่มสอบในโหมดเต็มหน้าจอ</li>
+                <li className="flex gap-3"><DoorOpen className="mt-0.5 size-5 shrink-0 text-[#f2b84b]" /> การสลับแท็บหรือออกจากเต็มหน้าจอจะถูกบันทึก</li>
+                <li className="flex gap-3"><Clock3 className="mt-0.5 size-5 shrink-0 text-[#f2b84b]" /> ระบบบันทึกเวลาที่ใช้ทำข้อสอบ</li>
+              </ul>
+            </div>
+          </div>
+          <div className="p-6 sm:p-10">
+            <div className="mb-7"><p className="text-sm font-semibold text-[#0e5965]">ลงชื่อเข้าสอบ</p><p className="mt-1 text-base text-[#526b73]">กรอกข้อมูลให้ครบก่อนเริ่มทำข้อสอบ</p></div>
+            <form className="space-y-5" onSubmit={beginExam}>
+              <div className="space-y-2"><Label htmlFor="name">ชื่อ - นามสกุล</Label><Input id="name" required value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} placeholder="เช่น สมชาย ใจดี" className="h-11 bg-white text-base" /></div>
+              <div className="space-y-2"><Label htmlFor="classLevel">ชั้น / ห้อง</Label><Input id="classLevel" required value={form.classLevel} onChange={(event) => setForm({ ...form, classLevel: event.target.value })} placeholder="เช่น ปวช. 2/1" className="h-11 bg-white text-base" /></div>
+              <div className="space-y-2"><Label htmlFor="studentId">รหัสนักศึกษา</Label><Input id="studentId" required inputMode="numeric" value={form.studentId} onChange={(event) => setForm({ ...form, studentId: event.target.value })} placeholder="กรอกรหัสนักศึกษา" className="h-11 bg-white text-base" /></div>
+              <div className="rounded-xl bg-[#edf5f4] px-4 py-3 text-sm leading-6 text-[#365860]">เมื่อกดเริ่มทำข้อสอบ ระบบจะขอเปิดเต็มหน้าจอ และตรวจจับการออกจากหน้าสอบ</div>
+              <Button type="submit" size="lg" className="h-12 w-full bg-[#0e5965] text-base hover:bg-[#094852]"><UserRoundCheck className="size-5" /> เริ่มทำข้อสอบ</Button>
+            </form>
+          </div>
+        </section>
+      </main>
+    );
+  }
+
+  if (!currentQuestion) return null;
+  const selected = answers[String(currentQuestion.id)];
+  return (
+    <main className="min-h-screen bg-[#f1f6f6]" onContextMenu={(event) => event.preventDefault()}>
+      <header className="sticky top-0 z-20 border-b border-[#bed4d4] bg-[#0e5965] text-white shadow-sm">
+        <div className="mx-auto flex max-w-7xl items-center justify-between gap-4 px-4 py-3 sm:px-6">
+          <div className="min-w-0"><p className="truncate text-sm font-semibold text-[#ccece4]">{exam.title}</p><p className="text-xs text-[#95d5c8]">ข้อ {currentIndex + 1} จาก {exam.questions.length}</p></div>
+          <div className="flex items-center gap-3"><Badge className="hidden border-[#5bab9e] bg-[#135f6b] text-[#e7faf5] sm:inline-flex" variant="outline"><AlertTriangle className="size-3.5" /> เตือน {warnings}</Badge><div className="flex items-center gap-2 rounded-lg bg-[#073f49] px-3 py-2 font-mono text-sm font-bold"><Clock3 className="size-4 text-[#f2b84b]" />{formatDuration(elapsedSeconds)}</div></div>
+        </div>
+        <Progress value={progress} className="h-1 rounded-none bg-[#084954] [&_[data-slot=progress-indicator]]:bg-[#f2b84b]" />
+      </header>
+      <section className="mx-auto grid max-w-7xl gap-6 px-4 py-6 lg:grid-cols-[220px_minmax(0,1fr)] lg:px-6">
+        <aside className="order-2 rounded-2xl border border-[#c7dada] bg-white p-4 lg:order-1 lg:h-fit">
+          <div className="flex items-center justify-between"><p className="text-sm font-bold text-[#173f47]">รายการข้อสอบ</p><span className="text-xs text-[#567279]">ตอบ {answeredCount}/{exam.questions.length}</span></div>
+          <div className="mt-4 grid grid-cols-8 gap-2 lg:grid-cols-5">
+            {exam.questions.map((question, index) => <button key={question.id} type="button" onClick={() => setCurrentIndex(index)} aria-label={`ไปข้อ ${question.id}`} className={`aspect-square rounded-lg text-sm font-bold transition ${index === currentIndex ? "bg-[#0e5965] text-white ring-2 ring-[#a6dacf] ring-offset-2" : answers[String(question.id)] ? "bg-[#dff0ec] text-[#0e5965] hover:bg-[#c8e6df]" : "bg-[#edf2f3] text-[#5d7479] hover:bg-[#dfe9ea]"}`}>{question.id}</button>)}
+          </div>
+          <div className="mt-4 flex items-center gap-2 text-xs text-[#5d7479]"><span className="size-2 rounded-full bg-[#0e5965]" />กำลังทำ <span className="ml-2 size-2 rounded-full bg-[#dff0ec] ring-1 ring-[#81b9ad]" />ตอบแล้ว</div>
+        </aside>
+        <article className="order-1 rounded-3xl border border-[#c7dada] bg-white shadow-[0_14px_36px_rgb(18_60_69/7%)] lg:order-2">
+          <div className="border-b border-[#dbe7e7] px-6 py-5 sm:px-9"><p className="text-sm font-semibold text-[#0e5965]">คำถามข้อที่ {currentQuestion.id}</p><h1 className="mt-3 text-xl font-bold leading-8 text-[#143a43] sm:text-2xl">{currentQuestion.question}</h1></div>
+          <div className="px-6 py-7 sm:px-9 sm:py-9">
+            <RadioGroup value={selected ?? ""} onValueChange={(value) => setAnswers((existing) => ({ ...existing, [String(currentQuestion.id)]: value }))} className="gap-3">
+              {currentQuestion.options.map((option) => {
+                const id = `question-${currentQuestion.id}-${option.label}`;
+                const isSelected = selected === option.label;
+                return <label key={option.label} htmlFor={id} className={`flex cursor-pointer items-start gap-4 rounded-2xl border p-4 text-base leading-7 transition sm:p-5 ${isSelected ? "border-[#0e5965] bg-[#e7f4f1] shadow-sm" : "border-[#d4e1e2] bg-white hover:border-[#95c9bf] hover:bg-[#f6fbfa]"}`}><RadioGroupItem value={option.label} id={id} className="mt-1 size-5 border-[#6d9699] text-[#0e5965]" /><span><span className="mr-2 font-bold text-[#0e5965]">{option.label}.</span>{option.text}</span></label>;
+              })}
+            </RadioGroup>
+          </div>
+          <div className="flex flex-col-reverse gap-3 border-t border-[#dbe7e7] bg-[#f8fbfb] p-5 sm:flex-row sm:items-center sm:justify-between sm:px-9">
+            <Button type="button" variant="outline" onClick={() => setCurrentIndex((index) => Math.max(0, index - 1))} disabled={currentIndex === 0} className="h-11"><ArrowLeft /> ข้อก่อนหน้า</Button>
+            {currentIndex === exam.questions.length - 1 ? <Button type="button" onClick={() => setSubmitDialogOpen(true)} className="h-11 bg-[#0e5965] text-base hover:bg-[#094852]">ส่งคำตอบ <CheckCircle2 /></Button> : <Button type="button" onClick={() => setCurrentIndex((index) => Math.min(exam.questions.length - 1, index + 1))} className="h-11">ข้อถัดไป <ArrowRight /></Button>}
+          </div>
+        </article>
+      </section>
+      <Dialog open={Boolean(violation)} onOpenChange={() => undefined}>
+        <DialogContent showCloseButton={false} className="border-[#e5bb7c] bg-[#fffaf0] sm:max-w-md"><DialogHeader><DialogTitle className="flex items-center gap-2 text-[#8b511b]"><AlertTriangle className="size-5" /> แจ้งเตือนระหว่างสอบ</DialogTitle><DialogDescription className="leading-6 text-[#6b5636]">{violation} ระบบบันทึกเหตุการณ์นี้ไว้แล้ว</DialogDescription></DialogHeader><DialogFooter><Button type="button" onClick={resumeFullScreen} className="bg-[#0e5965]">กลับเข้าสู่โหมดสอบ</Button></DialogFooter></DialogContent>
+      </Dialog>
+      <Dialog open={submitDialogOpen} onOpenChange={setSubmitDialogOpen}>
+        <DialogContent className="sm:max-w-md"><DialogHeader><DialogTitle>ส่งคำตอบและจบการสอบ?</DialogTitle><DialogDescription className="leading-6">คุณตอบแล้ว {answeredCount} จาก {exam.questions.length} ข้อ เมื่อส่งคำตอบแล้วจะไม่สามารถแก้ไขได้</DialogDescription></DialogHeader><DialogFooter><Button type="button" variant="outline" onClick={() => setSubmitDialogOpen(false)}>กลับไปตรวจคำตอบ</Button><Button type="button" onClick={submitExam} className="bg-[#0e5965]">ยืนยันส่งคำตอบ</Button></DialogFooter></DialogContent>
+      </Dialog>
+    </main>
+  );
+}
+
+function Notice({ icon, title, message, action, onAction }: { icon: ReactNode; title: string; message: string; action?: string; onAction?: () => void }) {
+  return <main className="grid min-h-screen place-items-center px-4"><section className="w-full max-w-md rounded-3xl border border-[#c7dada] bg-white p-8 text-center shadow-[0_20px_60px_rgb(18_60_69/12%)]"><div className="mx-auto grid size-12 place-items-center rounded-2xl bg-[#dff0ec] text-[#0e5965]">{icon}</div><h1 className="mt-5 text-xl font-bold text-[#163c45]">{title}</h1><p className="mt-2 text-base text-[#5d7479]">{message}</p>{action && onAction ? <Button className="mt-6" onClick={onAction}>{action}</Button> : null}</section></main>;
+}

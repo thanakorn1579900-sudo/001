@@ -1,0 +1,67 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+@import "../vendor/shadcn-tailwind-4.13.0.css";
+
+:root {
+  --background: #f2f6f7;
+  --foreground: #102a35;
+  --card: #ffffff;
+  --card-foreground: #102a35;
+  --popover: #ffffff;
+  --popover-foreground: #102a35;
+  --primary: #0e5965;
+  --primary-foreground: #ffffff;
+  --secondary: #dff0ec;
+  --secondary-foreground: #123c45;
+  --muted: #e7edef;
+  --muted-foreground: #526b73;
+  --accent: #d9ede9;
+  --accent-foreground: #102a35;
+  --destructive: #bd3b32;
+  --border: #cbdadd;
+  --input: #bdd0d4;
+  --ring: #0e5965;
+  --radius: 0.8rem;
+  --font-sans: Tahoma, "Noto Sans Thai", Arial, sans-serif;
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+  --font-sans: var(--font-sans);
+}
+
+* { box-sizing: border-box; }
+
+html { background: #f2f6f7; }
+
+body {
+  min-height: 100vh;
+  background: radial-gradient(circle at 18% 0%, rgb(134 207 190 / 23%), transparent 27rem), linear-gradient(180deg, #f8fbfb 0%, #eef4f4 100%);
+  color: var(--foreground);
+  font-family: var(--font-sans);
+}
+
+button, input { font: inherit; }
+
+::selection { background: #b8e3d8; color: #102a35; }
