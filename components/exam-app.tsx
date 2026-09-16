@@ -268,8 +268,8 @@ export function ExamApp() {
         <section className="mx-auto grid max-w-5xl overflow-hidden rounded-3xl border border-[#c5dcda] bg-white shadow-[0_24px_70px_rgb(18_60_69/12%)] lg:grid-cols-[1.02fr_0.98fr]">
           <div className="bg-[#0e5965] px-6 py-10 text-white sm:px-10 sm:py-14">
             <Badge className="border-[#75cbb8] bg-[#135f6b] px-3 py-1 text-sm text-[#e4faf4]" variant="outline"><ShieldCheck className="size-4" /> โหมดสอบ</Badge>
-            <h1 className="mt-6 text-3xl font-bold leading-tight tracking-tight sm:text-4xl">{selectedSubject.title}</h1>
-            <p className="mt-4 max-w-md text-base leading-7 text-[#dff0ec]">{selectedSubject.description} · ข้อสอบปรนัย {selectedSubject.questionCount} ข้อ ระบบตรวจคะแนนหลังส่งคำตอบและบันทึกเหตุการณ์ระหว่างทำข้อสอบ</p>
+            <h1 className="mt-6 text-3xl font-bold leading-tight tracking-tight sm:text-4xl">ข้อสอบแผนกช่างยนต์<br />โดย ครูธนากร สมปาน</h1>
+            <p className="mt-4 max-w-md text-base leading-7 text-[#dff0ec]">เลือกวิชาสอบและลงชื่อเข้าสอบ ระบบตรวจคะแนนหลังส่งคำตอบและบันทึกเหตุการณ์ระหว่างทำข้อสอบ</p>
             <div className="mt-10 border-t border-[#45909a] pt-7">
               <p className="text-sm font-semibold uppercase tracking-[0.12em] text-[#9cd8cb]">กติกาการสอบ</p>
               <ul className="mt-4 space-y-4 text-base text-[#edfafa]">

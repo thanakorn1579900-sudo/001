@@ -2,8 +2,8 @@ import type { Metadata } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "แบบทดสอบงานอิเล็กทรอนิกส์รถยนต์",
-  description: "ระบบสอบออนไลน์สำหรับงานอิเล็กทรอนิกส์รถยนต์เบื้องต้น",
+  title: "ข้อสอบแผนกช่างยนต์ | ครูธนากร สมปาน",
+  description: "ระบบสอบออนไลน์แผนกช่างยนต์ โดย ครูธนากร สมปาน",
   icons: { icon: "/favicon.svg", shortcut: "/favicon.svg" },
 };
 
