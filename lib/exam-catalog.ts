@@ -1,5 +1,6 @@
 import { examQuestions } from "@/lib/exam-data";
 import { drivingExamQuestions } from "@/lib/driving-exam-data";
+import { fuelLubricantsExamQuestions } from "@/lib/fuel-lubricants-exam-data";
 import { defaultExamSubjectId, type ExamSubjectId, getExamSubjectInfo } from "@/lib/exam-subjects";
 
 export const examCatalog = {
@@ -10,6 +11,10 @@ export const examCatalog = {
   driving: {
     title: "แบบทดสอบงานขับรถยนต์",
     questions: drivingExamQuestions,
+  },
+  "fuel-lubricants": {
+    title: "แบบทดสอบเชื้อเพลิงและวัสดุหล่อลื่น",
+    questions: fuelLubricantsExamQuestions,
   },
 } as const;
 

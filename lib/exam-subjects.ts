@@ -11,6 +11,12 @@ export const examSubjects = [
     description: "กฎจราจร การขับขี่ปลอดภัย และการบำรุงรักษารถยนต์",
     questionCount: 50,
   },
+  {
+    id: "fuel-lubricants",
+    title: "เชื้อเพลิงและวัสดุหล่อลื่น",
+    description: "พลังงาน เชื้อเพลิง การกลั่น และการใช้วัสดุหล่อลื่น",
+    questionCount: 50,
+  },
 ] as const;
 
 export type ExamSubjectId = (typeof examSubjects)[number]["id"];
