@@ -1,5 +1,7 @@
 import { getExam } from "@/lib/exam-catalog";
 import { defaultExamSubjectId, isExamSubjectId } from "@/lib/exam-subjects";
+import { getChatGPTUser } from "@/app/chatgpt-auth";
+import { getExamEnabled, getStudentProfile, isAdmin } from "@/db/repository";
 
 export const runtime = "edge";
 
@@ -22,6 +24,17 @@ const getSubjectId = (value: unknown) =>
   typeof value === "string" && isExamSubjectId(value) ? value : defaultExamSubjectId;
 
 export async function GET(request: Request) {
+  const user = await getChatGPTUser();
+  if (!user) return Response.json({ error: "กรุณาลงชื่อเข้าใช้ก่อน" }, { status: 401 });
+
+  const [profile, admin, examEnabled] = await Promise.all([
+    getStudentProfile(user.userId),
+    isAdmin(user.userId),
+    getExamEnabled(),
+  ]);
+  if (!profile || admin) return Response.json({ error: "ไม่พบสิทธิ์เข้าสอบ" }, { status: 403 });
+  if (!examEnabled) return Response.json({ error: "ระบบสอบยังไม่เปิด" }, { status: 423 });
+
   const subjectId = getSubjectId(new URL(request.url).searchParams.get("subject"));
   const exam = getExam(subjectId);
   const questions = exam.questions.map(({ answer: _answer, ...question }) => question);
@@ -33,6 +46,9 @@ export async function GET(request: Request) {
 }
 
 export async function POST(request: Request) {
+  const user = await getChatGPTUser();
+  if (!user) return Response.json({ error: "กรุณาลงชื่อเข้าใช้ก่อน" }, { status: 401 });
+
   let body: Submission;
   try {
     body = (await request.json()) as Submission;
@@ -40,16 +56,15 @@ export async function POST(request: Request) {
     return Response.json({ error: "รูปแบบข้อมูลไม่ถูกต้อง" }, { status: 400 });
   }
 
-  const name = cleanText(body.name, 120);
-  const classLevel = cleanText(body.classLevel, 80);
-  const studentId = cleanText(body.studentId, 80);
+  const [profile, admin] = await Promise.all([getStudentProfile(user.userId), isAdmin(user.userId)]);
+  if (!profile || admin) return Response.json({ error: "ไม่พบสิทธิ์ส่งคำตอบ" }, { status: 403 });
+
+  const name = profile.name;
+  const classLevel = profile.classLevel;
+  const studentId = profile.studentId;
   const subjectId = getSubjectId(body.subjectId);
   const exam = getExam(subjectId);
   const answers = body.answers && typeof body.answers === "object" ? body.answers as Record<string, unknown> : {};
-
-  if (!name || !classLevel || !studentId) {
-    return Response.json({ error: "กรอกชื่อ ชั้น และรหัสนักศึกษาให้ครบ" }, { status: 400 });
-  }
 
   const answered = exam.questions.filter((question) => typeof answers[String(question.id)] === "string").length;
   const score = exam.questions.reduce(
