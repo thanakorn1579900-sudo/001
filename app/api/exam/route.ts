@@ -1,6 +1,7 @@
 import { getExam } from "@/lib/exam-catalog";
 import { defaultExamSubjectId, isExamSubjectId } from "@/lib/exam-subjects";
 import { getExamEnabled } from "@/db/repository";
+import { getUploadedExam } from "@/lib/uploaded-exams";
 import { after } from "next/server";
 
 export const runtime = "edge";
@@ -20,14 +21,18 @@ type Submission = {
 const cleanText = (value: unknown, maxLength: number) =>
   typeof value === "string" ? value.trim().slice(0, maxLength) : "";
 
-const getSubjectId = (value: unknown) =>
-  typeof value === "string" && isExamSubjectId(value) ? value : defaultExamSubjectId;
+const getSubjectId = (value: unknown) => typeof value === "string" ? value.trim().slice(0, 120) : defaultExamSubjectId;
+
+async function resolveExam(subjectId: string) {
+  return isExamSubjectId(subjectId) ? getExam(subjectId) : getUploadedExam(subjectId);
+}
 
 export async function GET(request: Request) {
   if (!(await getExamEnabled())) return Response.json({ error: "ระบบสอบยังไม่เปิด" }, { status: 423 });
 
   const subjectId = getSubjectId(new URL(request.url).searchParams.get("subject"));
-  const exam = getExam(subjectId);
+  const exam = await resolveExam(subjectId);
+  if (!exam) return Response.json({ error: "ไม่พบข้อสอบรายวิชานี้" }, { status: 404 });
   const questions = exam.questions.map(({ answer: _answer, ...question }) => question);
   return Response.json({
     subject: exam.subject,
@@ -48,7 +53,8 @@ export async function POST(request: Request) {
   const classLevel = cleanText(body.classLevel, 80);
   const studentId = cleanText(body.studentId, 80);
   const subjectId = getSubjectId(body.subjectId);
-  const exam = getExam(subjectId);
+  const exam = await resolveExam(subjectId);
+  if (!exam) return Response.json({ error: "ไม่พบข้อสอบรายวิชานี้" }, { status: 404 });
   const answers = body.answers && typeof body.answers === "object" ? body.answers as Record<string, unknown> : {};
 
   if (!name || !classLevel || !studentId) {

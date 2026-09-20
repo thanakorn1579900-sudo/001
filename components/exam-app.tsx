@@ -13,11 +13,15 @@ import {
   Gauge,
   LoaderCircle,
   LockKeyhole,
+  Pencil,
   Power,
+  Plus,
   RefreshCw,
   Settings2,
   ShieldCheck,
+  Upload,
   UserRoundCheck,
+  Trash2,
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -33,12 +37,14 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Progress } from "@/components/ui/progress";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
-import { examSubjects, defaultExamSubjectId, isExamSubjectId, type ExamSubjectId } from "@/lib/exam-subjects";
+import { Textarea } from "@/components/ui/textarea";
+import { examSubjects, defaultExamSubjectId } from "@/lib/exam-subjects";
 
 type Option = { label: string; text: string };
 type Question = { id: number; question: string; options: Option[] };
+type Subject = { id: string; title: string; description: string; questionCount: number };
 type ExamData = {
-  subject: { id: ExamSubjectId; title: string; description: string; questionCount: number };
+  subject: Subject;
   title: string;
   questions: Question[];
 };
@@ -56,6 +62,9 @@ type Result = {
 };
 type SystemStatus = { examEnabled: boolean };
 type AdminStatus = { authenticated: boolean; examEnabled: boolean };
+type UploadedExam = Subject & { sourceFileName: string; createdAt: string };
+type EditableQuestion = Question & { answer: string };
+type EditableExam = UploadedExam & { questions: EditableQuestion[] };
 
 const formatDuration = (seconds: number) => {
   const h = Math.floor(seconds / 3600).toString().padStart(2, "0");
@@ -71,9 +80,14 @@ export function ExamApp() {
   const [accountError, setAccountError] = useState("");
   const [adminPassword, setAdminPassword] = useState("");
   const [adminBusy, setAdminBusy] = useState(false);
+  const [uploadedExams, setUploadedExams] = useState<UploadedExam[]>([]);
+  const [uploadBusy, setUploadBusy] = useState(false);
+  const [uploadError, setUploadError] = useState("");
+  const [uploadNotice, setUploadNotice] = useState("");
   const [exam, setExam] = useState<ExamData | null>(null);
   const [loadError, setLoadError] = useState("");
-  const [selectedSubjectId, setSelectedSubjectId] = useState<ExamSubjectId>(defaultExamSubjectId);
+  const [subjects, setSubjects] = useState<Subject[]>([...examSubjects]);
+  const [selectedSubjectId, setSelectedSubjectId] = useState<string>(defaultExamSubjectId);
   const [screen, setScreen] = useState<"register" | "exam" | "result">("register");
   const [form, setForm] = useState({ name: "", classLevel: "", studentId: "" });
   const [answers, setAnswers] = useState<Record<string, string>>({});
@@ -103,18 +117,46 @@ export function ExamApp() {
     }
   };
 
+  const refreshSubjects = async () => {
+    try {
+      const response = await fetch("/api/subjects", { cache: "no-store" });
+      const data = await response.json() as { subjects?: Subject[]; error?: string };
+      if (!response.ok || !Array.isArray(data.subjects)) throw new Error(data.error || "ไม่สามารถโหลดรายวิชาได้");
+      setSubjects(data.subjects);
+      setSelectedSubjectId((current) => data.subjects?.some((subject) => subject.id === current) ? current : data.subjects?.[0]?.id || defaultExamSubjectId);
+    } catch {
+      // The built-in subjects remain available if the optional uploaded list cannot load.
+    }
+  };
+
+  const refreshUploadedExams = async () => {
+    try {
+      const response = await fetch("/api/admin/exams", { cache: "no-store" });
+      const data = await response.json() as { exams?: UploadedExam[]; error?: string };
+      if (!response.ok || !Array.isArray(data.exams)) throw new Error(data.error || "ไม่สามารถโหลดรายการข้อสอบได้");
+      setUploadedExams(data.exams);
+    } catch (error) {
+      setUploadError(error instanceof Error ? error.message : "ไม่สามารถโหลดรายการข้อสอบได้");
+    }
+  };
+
   const refreshAdmin = async () => {
     try {
       const response = await fetch("/api/admin", { cache: "no-store" });
       const data = await response.json() as AdminStatus & { error?: string };
       if (!response.ok) throw new Error(data.error || "ไม่สามารถตรวจสอบสิทธิ์แอดมินได้");
       setAdminState(data);
+      if (data.authenticated) void refreshUploadedExams();
     } catch (error) {
       setAccountError(error instanceof Error ? error.message : "ไม่สามารถตรวจสอบสิทธิ์แอดมินได้");
     }
   };
 
   useEffect(() => { void refreshSystem(); }, []);
+
+  useEffect(() => {
+    if (system?.examEnabled) void refreshSubjects();
+  }, [system?.examEnabled]);
 
   useEffect(() => {
     if (!system?.examEnabled) return;
@@ -200,7 +242,7 @@ export function ExamApp() {
   }, [submitting]);
 
   const answeredCount = useMemo(() => Object.keys(answers).length, [answers]);
-  const selectedSubject = examSubjects.find((subject) => subject.id === selectedSubjectId) ?? examSubjects[0];
+  const selectedSubject = subjects.find((subject) => subject.id === selectedSubjectId) ?? subjects[0] ?? examSubjects[0];
   const isExamLoading = !exam || exam.subject.id !== selectedSubjectId;
   const currentQuestion = exam?.questions[currentIndex];
   const progress = exam ? (answeredCount / exam.questions.length) * 100 : 0;
@@ -238,6 +280,29 @@ export function ExamApp() {
       setAccountError(error instanceof Error ? error.message : "ดำเนินการไม่สำเร็จ");
     } finally {
       setAdminBusy(false);
+    }
+  };
+
+  const uploadExam = async ({ file, title, description }: { file: File; title: string; description: string }) => {
+    setUploadBusy(true);
+    setUploadError("");
+    setUploadNotice("");
+    try {
+      const data = new FormData();
+      data.set("file", file);
+      data.set("title", title);
+      data.set("description", description);
+      const response = await fetch("/api/admin/exams", { method: "POST", body: data });
+      const result = await response.json() as { message?: string; error?: string };
+      if (!response.ok) throw new Error(result.error || "ไม่สามารถอัปโหลดข้อสอบได้");
+      setUploadNotice(result.message || "เพิ่มข้อสอบแล้ว");
+      await Promise.all([refreshUploadedExams(), refreshSubjects()]);
+      return true;
+    } catch (error) {
+      setUploadError(error instanceof Error ? error.message : "ไม่สามารถอัปโหลดข้อสอบได้");
+      return false;
+    } finally {
+      setUploadBusy(false);
     }
   };
 
@@ -305,7 +370,7 @@ export function ExamApp() {
   }
 
   if (portal === "admin") {
-    return <AdminPortal admin={admin} password={adminPassword} setPassword={setAdminPassword} busy={adminBusy} error={accountError} onBack={() => { setPortal("student"); setAccountError(""); }} onLogin={() => void setAdmin("login")} onLogout={() => void setAdmin("logout")} onSetEnabled={(enabled) => void setAdmin("setExamEnabled", enabled)} />;
+    return <AdminPortal admin={admin} password={adminPassword} setPassword={setAdminPassword} busy={adminBusy} error={accountError} uploadedExams={uploadedExams} uploadBusy={uploadBusy} uploadError={uploadError} uploadNotice={uploadNotice} onBack={() => { setPortal("student"); setAccountError(""); }} onLogin={() => void setAdmin("login")} onLogout={() => void setAdmin("logout")} onSetEnabled={(enabled) => void setAdmin("setExamEnabled", enabled)} onUpload={uploadExam} onDataChanged={() => { void Promise.all([refreshUploadedExams(), refreshSubjects()]); }} />;
   }
 
   if (!system.examEnabled) {
@@ -380,10 +445,8 @@ export function ExamApp() {
             <form className="space-y-5" onSubmit={beginExam}>
               <div className="space-y-3">
                 <Label>เลือกวิชาสอบ</Label>
-                <RadioGroup value={selectedSubjectId} onValueChange={(value) => {
-                  if (isExamSubjectId(value)) setSelectedSubjectId(value);
-                }} className="grid gap-3">
-                  {examSubjects.map((subject) => {
+                <RadioGroup value={selectedSubjectId} onValueChange={setSelectedSubjectId} className="grid gap-3">
+                  {subjects.map((subject) => {
                     const id = `subject-${subject.id}`;
                     const isSelected = subject.id === selectedSubjectId;
                     return <label key={subject.id} htmlFor={id} className={`flex cursor-pointer items-start gap-3 rounded-xl border p-4 transition ${isSelected ? "border-[#0e5965] bg-[#e7f4f1]" : "border-[#cfdddd] bg-white hover:border-[#95c9bf]"}`}>
@@ -454,17 +517,105 @@ export function ExamApp() {
   );
 }
 
-function AdminPortal({ admin, password, setPassword, busy, error, onBack, onLogin, onLogout, onSetEnabled }: {
+function AdminPortal({ admin, password, setPassword, busy, error, uploadedExams, uploadBusy, uploadError, uploadNotice, onBack, onLogin, onLogout, onSetEnabled, onUpload, onDataChanged }: {
   admin: AdminStatus | null;
   password: string;
   setPassword: (value: string) => void;
   busy: boolean;
   error: string;
+  uploadedExams: UploadedExam[];
+  uploadBusy: boolean;
+  uploadError: string;
+  uploadNotice: string;
   onBack: () => void;
   onLogin: () => void;
   onLogout: () => void;
   onSetEnabled: (enabled: boolean) => void;
+  onUpload: (input: { file: File; title: string; description: string }) => Promise<boolean>;
+  onDataChanged: () => void;
 }) {
+  const [file, setFile] = useState<File | null>(null);
+  const [title, setTitle] = useState("");
+  const [description, setDescription] = useState("");
+  const [editing, setEditing] = useState<EditableExam | null>(null);
+  const [editorBusy, setEditorBusy] = useState(false);
+  const [editorError, setEditorError] = useState("");
+  const [deleteTarget, setDeleteTarget] = useState<UploadedExam | null>(null);
+
+  const loadEditor = async (id: string) => {
+    setEditorBusy(true);
+    setEditorError("");
+    try {
+      const response = await fetch(`/api/admin/exams/${encodeURIComponent(id)}`, { cache: "no-store" });
+      const data = await response.json() as { exam?: EditableExam; error?: string };
+      if (!response.ok || !data.exam) throw new Error(data.error || "ไม่สามารถเปิดข้อสอบเพื่อแก้ไขได้");
+      setEditing(data.exam);
+    } catch (loadError) {
+      setEditorError(loadError instanceof Error ? loadError.message : "ไม่สามารถเปิดข้อสอบเพื่อแก้ไขได้");
+    } finally {
+      setEditorBusy(false);
+    }
+  };
+
+  const saveEditor = async () => {
+    if (!editing) return;
+    setEditorBusy(true);
+    setEditorError("");
+    try {
+      const response = await fetch(`/api/admin/exams/${encodeURIComponent(editing.id)}`, {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ title: editing.title, description: editing.description, questions: editing.questions }),
+      });
+      const data = await response.json() as { error?: string };
+      if (!response.ok) throw new Error(data.error || "ไม่สามารถบันทึกการแก้ไขข้อสอบได้");
+      setEditing(null);
+      onDataChanged();
+    } catch (saveError) {
+      setEditorError(saveError instanceof Error ? saveError.message : "ไม่สามารถบันทึกการแก้ไขข้อสอบได้");
+    } finally {
+      setEditorBusy(false);
+    }
+  };
+
+  const deleteExam = async () => {
+    if (!deleteTarget) return;
+    setEditorBusy(true);
+    setEditorError("");
+    try {
+      const response = await fetch(`/api/admin/exams/${encodeURIComponent(deleteTarget.id)}`, { method: "DELETE" });
+      const data = await response.json() as { error?: string };
+      if (!response.ok) throw new Error(data.error || "ไม่สามารถลบชุดข้อสอบได้");
+      setDeleteTarget(null);
+      onDataChanged();
+    } catch (deleteError) {
+      setEditorError(deleteError instanceof Error ? deleteError.message : "ไม่สามารถลบชุดข้อสอบได้");
+    } finally {
+      setEditorBusy(false);
+    }
+  };
+
+  const updateQuestion = (index: number, change: Partial<EditableQuestion>) => {
+    setEditing((current) => current ? { ...current, questions: current.questions.map((question, questionIndex) => questionIndex === index ? { ...question, ...change } : question) } : current);
+  };
+
+  const updateOption = (questionIndex: number, optionIndex: number, optionText: string) => {
+    setEditing((current) => current ? {
+      ...current,
+      questions: current.questions.map((question, index) => index === questionIndex ? { ...question, options: question.options.map((option, index) => index === optionIndex ? { ...option, text: optionText } : option) } : question),
+    } : current);
+  };
+
+  const removeQuestion = (index: number) => {
+    setEditing((current) => current && current.questions.length > 1 ? { ...current, questions: current.questions.filter((_, questionIndex) => questionIndex !== index).map((question, questionIndex) => ({ ...question, id: questionIndex + 1 })) } : current);
+  };
+
+  const addQuestion = () => {
+    setEditing((current) => current ? {
+      ...current,
+      questions: [...current.questions, { id: current.questions.length + 1, question: "", options: ["ก", "ข", "ค", "ง"].map((label) => ({ label, text: "" })), answer: "ก" }],
+    } : current);
+  };
   if (!admin?.authenticated) {
     return (
       <main className="grid min-h-screen place-items-center px-4">
@@ -480,11 +631,41 @@ function AdminPortal({ admin, password, setPassword, busy, error, onBack, onLogi
 
   const status = admin.examEnabled;
   return (
-    <main className="grid min-h-screen place-items-center px-4 py-8">
-      <section className="w-full max-w-2xl overflow-hidden rounded-3xl border border-[#c5dcda] bg-white shadow-[0_24px_70px_rgb(18_60_69/12%)]">
+    <main className="min-h-screen px-4 py-8">
+      <section className="mx-auto w-full max-w-3xl overflow-hidden rounded-3xl border border-[#c5dcda] bg-white shadow-[0_24px_70px_rgb(18_60_69/12%)]">
         <div className="bg-[#0e5965] px-7 py-8 text-white sm:px-10"><div className="flex items-center justify-between gap-4"><div><p className="flex items-center gap-2 text-sm font-semibold text-[#dff0ec]"><Settings2 className="size-4" /> แผงควบคุมผู้ดูแล</p><h1 className="mt-3 text-3xl font-bold">ระบบสอบแผนกช่างยนต์</h1></div><Button type="button" variant="secondary" onClick={onLogout}>ออกจากระบบ</Button></div></div>
-        <div className="p-7 sm:p-10"><div className={`rounded-2xl border p-6 ${status ? "border-[#9acfc3] bg-[#e9f6f1]" : "border-[#e9c48e] bg-[#fff6e5]"}`}><div className="flex flex-col justify-between gap-5 sm:flex-row sm:items-center"><div><p className="text-sm font-semibold text-[#526b73]">สถานะระบบสอบ</p><p className={`mt-1 text-2xl font-bold ${status ? "text-[#17604f]" : "text-[#8b511b]"}`}>{status ? "เปิดรับนักเรียนเข้าสอบ" : "ปิดระบบสอบ"}</p><p className="mt-2 max-w-md text-sm leading-6 text-[#526b73]">{status ? "นักเรียนจึงจะโหลดข้อสอบได้" : "นักเรียนจะไม่สามารถเปิดดูข้อสอบหรือเริ่มสอบได้"}</p></div><Button type="button" disabled={busy} onClick={() => onSetEnabled(!status)} className={status ? "bg-[#9b3d32] hover:bg-[#7f3027]" : "bg-[#0e5965] hover:bg-[#094852]"}>{busy ? <LoaderCircle className="animate-spin" /> : <Power />}{status ? "ปิดระบบสอบ" : "เปิดระบบสอบ"}</Button></div></div>{error ? <p className="mt-5 rounded-xl border border-[#e9c48e] bg-[#fff6e5] px-4 py-3 text-sm font-medium text-[#8b511b]">{error}</p> : null}<div className="mt-7 rounded-xl bg-[#edf5f4] p-4 text-sm leading-6 text-[#365860]">การปิดระบบจะหยุดการเข้าถึงข้อสอบสำหรับผู้เรียนรายใหม่ทันที แต่ผู้ที่กำลังทำข้อสอบอยู่ยังส่งคำตอบได้ตามปกติ</div></div>
+        <div className="space-y-7 p-7 sm:p-10"><div className={`rounded-2xl border p-6 ${status ? "border-[#9acfc3] bg-[#e9f6f1]" : "border-[#e9c48e] bg-[#fff6e5]"}`}><div className="flex flex-col justify-between gap-5 sm:flex-row sm:items-center"><div><p className="text-sm font-semibold text-[#526b73]">สถานะระบบสอบ</p><p className={`mt-1 text-2xl font-bold ${status ? "text-[#17604f]" : "text-[#8b511b]"}`}>{status ? "เปิดรับนักเรียนเข้าสอบ" : "ปิดระบบสอบ"}</p><p className="mt-2 max-w-md text-sm leading-6 text-[#526b73]">{status ? "นักเรียนจึงจะโหลดข้อสอบได้" : "นักเรียนจะไม่สามารถเปิดดูข้อสอบหรือเริ่มสอบได้"}</p></div><Button type="button" disabled={busy} onClick={() => onSetEnabled(!status)} className={status ? "bg-[#9b3d32] hover:bg-[#7f3027]" : "bg-[#0e5965] hover:bg-[#094852]"}>{busy ? <LoaderCircle className="animate-spin" /> : <Power />}{status ? "ปิดระบบสอบ" : "เปิดระบบสอบ"}</Button></div></div>{error ? <p className="rounded-xl border border-[#e9c48e] bg-[#fff6e5] px-4 py-3 text-sm font-medium text-[#8b511b]">{error}</p> : null}
+
+          <section className="rounded-2xl border border-[#c7dada] bg-[#fbfefe] p-6"><div className="flex items-start gap-3"><div className="grid size-10 shrink-0 place-items-center rounded-xl bg-[#e6f2ef] text-[#0e5965]"><Upload className="size-5" /></div><div><h2 className="text-lg font-bold text-[#173f47]">เพิ่มข้อสอบจากไฟล์</h2><p className="mt-1 text-sm leading-6 text-[#526b73]">อัปโหลดไฟล์พร้อมโจทย์ ตัวเลือก และเฉลย ระบบจะสร้างรายวิชาใหม่และตรวจคะแนนให้อัตโนมัติ</p></div></div>
+            <form className="mt-5 space-y-4" onSubmit={async (event) => { event.preventDefault(); if (!file) return; const complete = await onUpload({ file, title, description }); if (complete) { setFile(null); setTitle(""); setDescription(""); } }}>
+              <div className="space-y-2"><Label htmlFor="exam-file">ไฟล์ข้อสอบ</Label><Input id="exam-file" type="file" accept=".docx,.txt,.csv,.json" required onChange={(event) => setFile(event.target.files?.[0] ?? null)} className="cursor-pointer bg-white" /><p className="text-xs leading-5 text-[#5d7479]">รองรับ DOCX, TXT, CSV และ JSON ขนาดไม่เกิน 5 MB — ไฟล์ Word .doc กรุณาบันทึกเป็น .docx ก่อน</p></div>
+              <div className="grid gap-4 sm:grid-cols-2"><div className="space-y-2"><Label htmlFor="uploaded-title">ชื่อวิชา / ชุดข้อสอบ</Label><Input id="uploaded-title" value={title} onChange={(event) => setTitle(event.target.value)} placeholder="เว้นว่างเพื่อใช้ชื่อไฟล์" /></div><div className="space-y-2"><Label htmlFor="uploaded-description">คำอธิบาย</Label><Input id="uploaded-description" value={description} onChange={(event) => setDescription(event.target.value)} placeholder="เช่น สอบปลายภาค" /></div></div>
+              <div className="rounded-xl bg-[#edf5f4] px-4 py-3 text-sm leading-6 text-[#365860]">รูปแบบข้อความ: <span className="font-semibold">1. คำถาม · ก. ตัวเลือก · ข. ตัวเลือก · ค. ตัวเลือก · ง. ตัวเลือก</span> และส่วนท้ายไฟล์เป็น <span className="font-semibold">เฉลย 1. ก</span></div>
+              {uploadError ? <p className="rounded-xl border border-[#e9c48e] bg-[#fff6e5] px-4 py-3 text-sm font-medium text-[#8b511b]">{uploadError}</p> : null}{uploadNotice ? <p className="rounded-xl border border-[#9acfc3] bg-[#e9f6f1] px-4 py-3 text-sm font-medium text-[#17604f]">{uploadNotice}</p> : null}
+              <Button type="submit" disabled={!file || uploadBusy} className="bg-[#0e5965] hover:bg-[#094852]">{uploadBusy ? <LoaderCircle className="animate-spin" /> : <Upload />} ประมวลผลและเพิ่มข้อสอบ</Button>
+            </form>
+          </section>
+
+          <section className="rounded-2xl border border-[#d8e5e5] bg-white p-6"><div className="flex items-center justify-between gap-4"><div><h2 className="text-lg font-bold text-[#173f47]">ข้อสอบที่อัปโหลด</h2><p className="mt-1 text-sm text-[#526b73]">นักเรียนจะเห็นรายวิชาเหล่านี้เมื่อเปิดระบบสอบ</p></div><Badge variant="outline" className="border-[#9acfc3] bg-[#e9f6f1] text-[#17604f]">{uploadedExams.length} ชุด</Badge></div>{uploadedExams.length ? <div className="mt-4 divide-y divide-[#e0ecec]">{uploadedExams.map((exam) => <div key={exam.id} className="flex flex-col gap-3 py-4 first:pt-0 last:pb-0 sm:flex-row sm:items-start sm:justify-between"><div><p className="font-semibold text-[#173f47]">{exam.title}</p><p className="mt-1 text-sm leading-5 text-[#526b73]">{exam.description}</p><p className="mt-1 text-xs text-[#6e8589]">ไฟล์ {exam.sourceFileName}</p></div><div className="flex items-center gap-2"><Badge className="shrink-0 bg-[#e6f2ef] text-[#0e5965] hover:bg-[#e6f2ef]">{exam.questionCount} ข้อ</Badge><Button type="button" variant="outline" size="sm" disabled={editorBusy} onClick={() => void loadEditor(exam.id)}><Pencil /> แก้ไข</Button><Button type="button" variant="outline" size="sm" disabled={editorBusy} onClick={() => { setEditorError(""); setDeleteTarget(exam); }} className="border-[#e2aaa3] text-[#9b3d32] hover:bg-[#fff1ef] hover:text-[#7f3027]"><Trash2 /> ลบ</Button></div></div>)}</div> : <p className="mt-4 rounded-xl bg-[#f3f7f7] px-4 py-3 text-sm text-[#5d7479]">ยังไม่มีข้อสอบที่อัปโหลด</p>}</section>
+
+          {editorError ? <p className="rounded-xl border border-[#e9c48e] bg-[#fff6e5] px-4 py-3 text-sm font-medium text-[#8b511b]">{editorError}</p> : null}
+          <div className="rounded-xl bg-[#edf5f4] p-4 text-sm leading-6 text-[#365860]">การปิดระบบจะหยุดการเข้าถึงข้อสอบสำหรับผู้เรียนรายใหม่ทันที แต่ผู้ที่กำลังทำข้อสอบอยู่ยังส่งคำตอบได้ตามปกติ</div>
+        </div>
       </section>
+      <Dialog open={Boolean(editing)} onOpenChange={(open) => { if (!open && !editorBusy) { setEditing(null); setEditorError(""); } }}>
+        <DialogContent className="max-h-[88vh] overflow-y-auto sm:max-w-3xl">
+          <DialogHeader><DialogTitle>แก้ไขชุดข้อสอบ</DialogTitle><DialogDescription>แก้ไขชื่อ รายละเอียด คำถาม ตัวเลือก และเฉลยได้ แล้วกดบันทึกเพื่อใช้ตรวจคะแนนอัตโนมัติ</DialogDescription></DialogHeader>
+          {editing ? <div className="space-y-5"><div className="grid gap-4 sm:grid-cols-2"><div className="space-y-2"><Label htmlFor="editor-title">ชื่อชุดข้อสอบ</Label><Input id="editor-title" value={editing.title} onChange={(event) => setEditing({ ...editing, title: event.target.value })} /></div><div className="space-y-2"><Label htmlFor="editor-description">คำอธิบาย</Label><Input id="editor-description" value={editing.description} onChange={(event) => setEditing({ ...editing, description: event.target.value })} /></div></div>
+            <div className="space-y-4">{editing.questions.map((question, questionIndex) => <section key={`${question.id}-${questionIndex}`} className="rounded-2xl border border-[#d5e3e3] bg-[#fbfefe] p-4"><div className="flex items-center justify-between gap-3"><p className="font-bold text-[#173f47]">ข้อ {questionIndex + 1}</p><Button type="button" variant="ghost" size="sm" disabled={editing.questions.length === 1 || editorBusy} onClick={() => removeQuestion(questionIndex)} className="text-[#9b3d32] hover:bg-[#fff1ef] hover:text-[#7f3027]"><Trash2 /> ลบข้อนี้</Button></div><div className="mt-3 space-y-2"><Label htmlFor={`editor-question-${questionIndex}`}>คำถาม</Label><Textarea id={`editor-question-${questionIndex}`} value={question.question} onChange={(event) => updateQuestion(questionIndex, { question: event.target.value })} className="min-h-20 bg-white" /></div><div className="mt-4 grid gap-3 sm:grid-cols-2">{question.options.map((option, optionIndex) => <div key={option.label} className="space-y-2"><Label htmlFor={`editor-option-${questionIndex}-${optionIndex}`}>ตัวเลือก {option.label}</Label><Input id={`editor-option-${questionIndex}-${optionIndex}`} value={option.text} onChange={(event) => updateOption(questionIndex, optionIndex, event.target.value)} /></div>)}</div><div className="mt-4 flex items-center gap-3"><Label htmlFor={`editor-answer-${questionIndex}`}>เฉลย</Label><select id={`editor-answer-${questionIndex}`} value={question.answer} onChange={(event) => updateQuestion(questionIndex, { answer: event.target.value })} className="h-9 rounded-md border border-input bg-white px-3 text-sm text-[#173f47]">{question.options.map((option) => <option key={option.label} value={option.label}>{option.label}. {option.text || "ตัวเลือก"}</option>)}</select></div></section>)}</div>
+            <Button type="button" variant="outline" disabled={editorBusy || editing.questions.length >= 200} onClick={addQuestion}><Plus /> เพิ่มข้อสอบ</Button>
+            {editorError ? <p className="rounded-xl border border-[#e9c48e] bg-[#fff6e5] px-4 py-3 text-sm font-medium text-[#8b511b]">{editorError}</p> : null}
+          </div> : null}
+          <DialogFooter><Button type="button" variant="outline" disabled={editorBusy} onClick={() => { setEditing(null); setEditorError(""); }}>ยกเลิก</Button><Button type="button" disabled={editorBusy} onClick={() => void saveEditor()} className="bg-[#0e5965]">{editorBusy ? <LoaderCircle className="animate-spin" /> : <Pencil />} บันทึกการแก้ไข</Button></DialogFooter>
+        </DialogContent>
+      </Dialog>
+      <Dialog open={Boolean(deleteTarget)} onOpenChange={(open) => { if (!open && !editorBusy) setDeleteTarget(null); }}>
+        <DialogContent className="sm:max-w-md"><DialogHeader><DialogTitle className="flex items-center gap-2 text-[#9b3d32]"><Trash2 className="size-5" /> ลบชุดข้อสอบ?</DialogTitle><DialogDescription className="leading-6">ต้องการลบ “{deleteTarget?.title}” ใช่หรือไม่? ไฟล์ต้นฉบับและข้อสอบชุดนี้จะถูกลบออกจากระบบ</DialogDescription></DialogHeader>{editorError ? <p className="rounded-xl border border-[#e9c48e] bg-[#fff6e5] px-4 py-3 text-sm font-medium text-[#8b511b]">{editorError}</p> : null}<DialogFooter><Button type="button" variant="outline" disabled={editorBusy} onClick={() => setDeleteTarget(null)}>ยกเลิก</Button><Button type="button" disabled={editorBusy} onClick={() => void deleteExam()} className="bg-[#9b3d32] hover:bg-[#7f3027]">{editorBusy ? <LoaderCircle className="animate-spin" /> : <Trash2 />} ยืนยันลบ</Button></DialogFooter></DialogContent>
+      </Dialog>
     </main>
   );
 }

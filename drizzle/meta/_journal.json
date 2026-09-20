@@ -8,6 +8,13 @@
       "when": 1789811754703,
       "tag": "0000_youthful_iceman",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "6",
+      "when": 1789877870429,
+      "tag": "0001_daily_crystal",
+      "breakpoints": true
     }
   ]
 }
