@@ -1,6 +1,7 @@
 import { getExam } from "@/lib/exam-catalog";
 import { defaultExamSubjectId, isExamSubjectId } from "@/lib/exam-subjects";
 import { getExamEnabled } from "@/db/repository";
+import { after } from "next/server";
 
 export const runtime = "edge";
 
@@ -87,24 +88,27 @@ export async function POST(request: Request) {
     });
   }
 
-  try {
-    const response = await fetch(endpoint, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        ...payload,
-        // The existing Google Apps Script stores classLevel in one column.
-        // Keep the selected subject visible in that sheet without requiring a script migration.
-        classLevel: `${classLevel} | ${exam.subject.title}`,
-      }),
-    });
-    if (!response.ok) throw new Error(`sheet response ${response.status}`);
-    return Response.json({ ...payload, recorded: true });
-  } catch {
-    return Response.json({
-      ...payload,
-      recorded: false,
-      message: "คำนวณคะแนนแล้ว แต่ส่งไปยัง Google Sheets ไม่สำเร็จ",
-    });
-  }
+  after(async () => {
+    try {
+      await fetch(endpoint, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          ...payload,
+          // The existing Google Apps Script stores classLevel in one column.
+          // Keep the selected subject visible in that sheet without requiring a script migration.
+          classLevel: `${classLevel} | ${exam.subject.title}`,
+        }),
+      });
+    } catch {
+      // Scoring has already been shown to the student; a background sheet error must not delay it.
+    }
+  });
+
+  return Response.json({
+    ...payload,
+    recorded: false,
+    recording: true,
+    message: "แสดงคะแนนแล้ว ระบบกำลังบันทึกผลลง Google Sheets",
+  });
 }

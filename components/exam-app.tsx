@@ -50,6 +50,7 @@ type Result = {
   warnings: number;
   elapsedSeconds: number;
   recorded: boolean;
+  recording?: boolean;
   subject?: string;
   message?: string;
 };
@@ -81,6 +82,7 @@ export function ExamApp() {
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
   const [warnings, setWarnings] = useState(0);
   const [violation, setViolation] = useState("");
+  const [unansweredTarget, setUnansweredTarget] = useState<number | null>(null);
   const [submitDialogOpen, setSubmitDialogOpen] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [result, setResult] = useState<Result | null>(null);
@@ -202,6 +204,22 @@ export function ExamApp() {
   const isExamLoading = !exam || exam.subject.id !== selectedSubjectId;
   const currentQuestion = exam?.questions[currentIndex];
   const progress = exam ? (answeredCount / exam.questions.length) * 100 : 0;
+  const unansweredCount = exam ? exam.questions.length - answeredCount : 0;
+
+  const moveToQuestion = (targetIndex: number) => {
+    if (!currentQuestion || targetIndex === currentIndex) return;
+    if (!answers[String(currentQuestion.id)]) {
+      setUnansweredTarget(targetIndex);
+      return;
+    }
+    setCurrentIndex(targetIndex);
+  };
+
+  const skipCurrentQuestion = () => {
+    if (unansweredTarget === null) return;
+    setCurrentIndex(unansweredTarget);
+    setUnansweredTarget(null);
+  };
 
   const setAdmin = async (action: "login" | "logout" | "setExamEnabled", enabled?: boolean) => {
     setAdminBusy(true);
@@ -330,7 +348,7 @@ export function ExamApp() {
               <p className="flex gap-3"><Clock3 className="mt-0.5 size-5 shrink-0 text-[#0e5965]" /> ใช้เวลา {formatDuration(result.elapsedSeconds)} น.</p>
               <p className="flex gap-3"><Gauge className="mt-0.5 size-5 shrink-0 text-[#0e5965]" /> ตอบแล้ว {result.answered} จาก {result.total} ข้อ</p>
               <p className="flex gap-3"><AlertTriangle className="mt-0.5 size-5 shrink-0 text-[#b45b24]" /> การเตือนระหว่างสอบ {result.warnings} ครั้ง</p>
-              <div className={`rounded-xl border px-4 py-3 text-sm font-medium ${result.recorded ? "border-[#9acfc3] bg-[#e9f6f1] text-[#17604f]" : "border-[#e9c48e] bg-[#fff6e5] text-[#8b511b]"}`}>
+              <div className={`rounded-xl border px-4 py-3 text-sm font-medium ${result.recorded ? "border-[#9acfc3] bg-[#e9f6f1] text-[#17604f]" : result.recording ? "border-[#9dbdce] bg-[#edf6fa] text-[#1e5b78]" : "border-[#e9c48e] bg-[#fff6e5] text-[#8b511b]"}`}>
                 {result.recorded ? "บันทึกคะแนนลงตารางผลสอบแล้ว" : result.message}
               </div>
             </div>
@@ -402,7 +420,7 @@ export function ExamApp() {
         <aside className="order-2 rounded-2xl border border-[#c7dada] bg-white p-4 lg:order-1 lg:h-fit">
           <div className="flex items-center justify-between"><p className="text-sm font-bold text-[#173f47]">รายการข้อสอบ</p><span className="text-xs text-[#567279]">ตอบ {answeredCount}/{exam.questions.length}</span></div>
           <div className="mt-4 grid grid-cols-8 gap-2 lg:grid-cols-5">
-            {exam.questions.map((question, index) => <button key={question.id} type="button" onClick={() => setCurrentIndex(index)} aria-label={`ไปข้อ ${question.id}`} className={`aspect-square rounded-lg text-sm font-bold transition ${index === currentIndex ? "bg-[#0e5965] text-white ring-2 ring-[#a6dacf] ring-offset-2" : answers[String(question.id)] ? "bg-[#dff0ec] text-[#0e5965] hover:bg-[#c8e6df]" : "bg-[#edf2f3] text-[#5d7479] hover:bg-[#dfe9ea]"}`}>{question.id}</button>)}
+            {exam.questions.map((question, index) => <button key={question.id} type="button" onClick={() => moveToQuestion(index)} aria-label={`ไปข้อ ${question.id}`} className={`aspect-square rounded-lg text-sm font-bold transition ${index === currentIndex ? "bg-[#0e5965] text-white ring-2 ring-[#a6dacf] ring-offset-2" : answers[String(question.id)] ? "bg-[#dff0ec] text-[#0e5965] hover:bg-[#c8e6df]" : "bg-[#edf2f3] text-[#5d7479] hover:bg-[#dfe9ea]"}`}>{question.id}</button>)}
           </div>
           <div className="mt-4 flex items-center gap-2 text-xs text-[#5d7479]"><span className="size-2 rounded-full bg-[#0e5965]" />กำลังทำ <span className="ml-2 size-2 rounded-full bg-[#dff0ec] ring-1 ring-[#81b9ad]" />ตอบแล้ว</div>
         </aside>
@@ -418,16 +436,19 @@ export function ExamApp() {
             </RadioGroup>
           </div>
           <div className="flex flex-col-reverse gap-3 border-t border-[#dbe7e7] bg-[#f8fbfb] p-5 sm:flex-row sm:items-center sm:justify-between sm:px-9">
-            <Button type="button" variant="outline" onClick={() => setCurrentIndex((index) => Math.max(0, index - 1))} disabled={currentIndex === 0} className="h-11"><ArrowLeft /> ข้อก่อนหน้า</Button>
-            {currentIndex === exam.questions.length - 1 ? <Button type="button" onClick={() => setSubmitDialogOpen(true)} className="h-11 bg-[#0e5965] text-base hover:bg-[#094852]">ส่งคำตอบ <CheckCircle2 /></Button> : <Button type="button" onClick={() => setCurrentIndex((index) => Math.min(exam.questions.length - 1, index + 1))} className="h-11">ข้อถัดไป <ArrowRight /></Button>}
+            <Button type="button" variant="outline" onClick={() => moveToQuestion(Math.max(0, currentIndex - 1))} disabled={currentIndex === 0} className="h-11"><ArrowLeft /> ข้อก่อนหน้า</Button>
+            {currentIndex === exam.questions.length - 1 ? <Button type="button" onClick={() => setSubmitDialogOpen(true)} className="h-11 bg-[#0e5965] text-base hover:bg-[#094852]">ส่งคำตอบ <CheckCircle2 /></Button> : <Button type="button" onClick={() => moveToQuestion(Math.min(exam.questions.length - 1, currentIndex + 1))} className="h-11">ข้อถัดไป <ArrowRight /></Button>}
           </div>
         </article>
       </section>
+      <Dialog open={unansweredTarget !== null} onOpenChange={(open) => { if (!open) setUnansweredTarget(null); }}>
+        <DialogContent className="border-[#e5bb7c] bg-[#fffaf0] sm:max-w-md"><DialogHeader><DialogTitle className="flex items-center gap-2 text-[#8b511b]"><AlertTriangle className="size-5" /> ยังไม่ได้ตอบข้อ {currentQuestion.id}</DialogTitle><DialogDescription className="leading-6 text-[#6b5636]">ต้องการกลับไปตอบข้อนี้ หรือข้ามไปก่อน?</DialogDescription></DialogHeader><DialogFooter><Button type="button" variant="outline" onClick={() => setUnansweredTarget(null)}>กลับไปตอบข้อนี้</Button><Button type="button" onClick={skipCurrentQuestion} className="bg-[#9b5a17] hover:bg-[#7f4912]">ข้ามไปก่อน</Button></DialogFooter></DialogContent>
+      </Dialog>
       <Dialog open={Boolean(violation)} onOpenChange={() => undefined}>
         <DialogContent showCloseButton={false} className="border-[#e5bb7c] bg-[#fffaf0] sm:max-w-md"><DialogHeader><DialogTitle className="flex items-center gap-2 text-[#8b511b]"><AlertTriangle className="size-5" /> แจ้งเตือนระหว่างสอบ</DialogTitle><DialogDescription className="leading-6 text-[#6b5636]">{violation} ระบบบันทึกเหตุการณ์นี้ไว้แล้ว</DialogDescription></DialogHeader><DialogFooter><Button type="button" onClick={resumeFullScreen} className="bg-[#0e5965]">กลับเข้าสู่โหมดสอบ</Button></DialogFooter></DialogContent>
       </Dialog>
       <Dialog open={submitDialogOpen} onOpenChange={setSubmitDialogOpen}>
-        <DialogContent className="sm:max-w-md"><DialogHeader><DialogTitle>ส่งคำตอบและจบการสอบ?</DialogTitle><DialogDescription className="leading-6">คุณตอบแล้ว {answeredCount} จาก {exam.questions.length} ข้อ เมื่อส่งคำตอบแล้วจะไม่สามารถแก้ไขได้</DialogDescription></DialogHeader><DialogFooter><Button type="button" variant="outline" onClick={() => setSubmitDialogOpen(false)}>กลับไปตรวจคำตอบ</Button><Button type="button" onClick={submitExam} className="bg-[#0e5965]">ยืนยันส่งคำตอบ</Button></DialogFooter></DialogContent>
+        <DialogContent className="sm:max-w-md"><DialogHeader><DialogTitle>ส่งคำตอบและจบการสอบ?</DialogTitle><DialogDescription className="leading-6">คุณตอบแล้ว {answeredCount} จาก {exam.questions.length} ข้อ เมื่อส่งคำตอบแล้วจะไม่สามารถแก้ไขได้</DialogDescription></DialogHeader>{unansweredCount > 0 ? <div className="rounded-xl border border-[#e5bb7c] bg-[#fff6e5] px-4 py-3 text-sm font-medium leading-6 text-[#8b511b]"><AlertTriangle className="mr-2 inline size-4" />ยังไม่ได้ตอบ {unansweredCount} ข้อ กรุณาตรวจสอบก่อนส่ง</div> : null}<DialogFooter><Button type="button" variant="outline" onClick={() => setSubmitDialogOpen(false)}>กลับไปตรวจคำตอบ</Button><Button type="button" onClick={submitExam} className="bg-[#0e5965]">ยืนยันส่งคำตอบ</Button></DialogFooter></DialogContent>
       </Dialog>
     </main>
   );
