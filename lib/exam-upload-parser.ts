@@ -1,10 +1,25 @@
 import type { UploadedOption, UploadedQuestion } from "@/lib/uploaded-exams";
 
-type ParsedUpload = { questions: UploadedQuestion[]; suggestedTitle: string };
-type RawQuestion = { question?: unknown; options?: unknown; answer?: unknown; correctAnswer?: unknown; "เฉลย"?: unknown };
+export type UploadDiagnostics = {
+  sourceFormat: "DOCX" | "TXT" | "CSV" | "JSON";
+  candidates: number;
+  accepted: number;
+  incomplete: number[];
+  answersFound: number;
+};
+
+export type ParsedUpload = {
+  questions: UploadedQuestion[];
+  suggestedTitle: string;
+  diagnostics: UploadDiagnostics;
+};
+
+type RawQuestion = Record<string, unknown>;
+type DraftQuestion = { number: number; question: string[]; options: UploadedOption[]; inlineAnswer?: string };
 
 const thaiLabels = ["ก", "ข", "ค", "ง", "จ", "ฉ"];
 const decode = new TextDecoder();
+const acceptedLabels = "กขคงจฉA-Fa-f1-6";
 
 function text(value: unknown, maxLength = 2_000) {
   return typeof value === "string" ? value.replace(/\s+/g, " ").trim().slice(0, maxLength) : "";
@@ -25,12 +40,15 @@ function decodeEntities(value: string) {
 }
 
 function optionLabel(value: unknown, index: number) {
-  const candidate = text(value, 8).replace(/[.)]/g, "");
+  const candidate = text(value, 12).replace(/[.)、:：\s]/g, "");
+  if (/^[a-f]$/i.test(candidate)) return candidate.toUpperCase();
   return candidate || thaiLabels[index] || String(index + 1);
 }
 
 function answerFor(value: unknown, options: UploadedOption[]) {
-  const candidate = text(String(value ?? ""), 60).replace(/^ข้อ\s*/i, "").replace(/[.)\s]/g, "");
+  const candidate = text(String(value ?? ""), 60)
+    .replace(/^(?:ข้อ|answer|correct|คำตอบ|เฉลย)\s*/i, "")
+    .replace(/[.)、:：\s()\[\]]/g, "");
   if (!candidate) return "";
   const direct = options.find((option) => option.label.toLowerCase() === candidate.toLowerCase());
   if (direct) return direct.label;
@@ -41,27 +59,40 @@ function answerFor(value: unknown, options: UploadedOption[]) {
   return "";
 }
 
+function optionsFrom(value: unknown): unknown[] {
+  if (Array.isArray(value)) return value;
+  if (value && typeof value === "object") {
+    return Object.entries(value as Record<string, unknown>).map(([label, option]) => ({ label, text: option }));
+  }
+  return [];
+}
+
 function normalizeQuestion(raw: RawQuestion, index: number): UploadedQuestion | null {
-  const question = text(raw.question);
-  const rawOptions = Array.isArray(raw.options) ? raw.options : [];
+  const question = text(raw.question ?? raw.text ?? raw.prompt ?? raw["คำถาม"] ?? raw["โจทย์"]);
+  const rawOptions = optionsFrom(raw.options ?? raw.choices ?? raw.answers ?? raw["ตัวเลือก"]);
   const options = rawOptions.map((value, optionIndex) => {
     if (value && typeof value === "object") {
-      const option = value as Partial<UploadedOption>;
-      return { label: optionLabel(option.label, optionIndex), text: text(option.text) };
+      const option = value as Partial<UploadedOption> & { value?: unknown; answer?: unknown };
+      return { label: optionLabel(option.label, optionIndex), text: text(option.text ?? option.value ?? option.answer) };
     }
     return { label: thaiLabels[optionIndex] || String(optionIndex + 1), text: text(value) };
   }).filter((option) => option.text);
-  const answer = answerFor(raw.answer ?? raw.correctAnswer ?? raw["เฉลย"], options);
+  const answer = answerFor(raw.answer ?? raw.correctAnswer ?? raw.correct ?? raw.answerKey ?? raw["เฉลย"] ?? raw["คำตอบ"], options);
   if (!question || options.length < 2 || !answer || new Set(options.map((option) => option.label)).size !== options.length) return null;
   return { id: index + 1, question, options, answer };
 }
 
+function diagnostics(sourceFormat: UploadDiagnostics["sourceFormat"], candidates: number, questions: UploadedQuestion[], incomplete: number[], answersFound: number): UploadDiagnostics {
+  return { sourceFormat, candidates, accepted: questions.length, incomplete, answersFound };
+}
+
 function parseJson(source: string, fileName: string): ParsedUpload {
-  const parsed = JSON.parse(source) as { title?: unknown; questions?: unknown } | unknown[];
-  const items = Array.isArray(parsed) ? parsed : Array.isArray(parsed.questions) ? parsed.questions : [];
+  const parsed = JSON.parse(source) as Record<string, unknown> | unknown[];
+  const items = Array.isArray(parsed) ? parsed : optionsFrom(parsed.questions ?? parsed.items ?? parsed["ข้อสอบ"]);
   const questions = items.map((item, index) => normalizeQuestion((item ?? {}) as RawQuestion, index)).filter((item): item is UploadedQuestion => Boolean(item));
-  const title = !Array.isArray(parsed) ? text(parsed.title, 160) : "";
-  return { questions, suggestedTitle: title || safeTitle(fileName) };
+  const title = !Array.isArray(parsed) ? text(parsed.title ?? parsed.name ?? parsed.subject ?? parsed["ชื่อวิชา"], 160) : "";
+  const incomplete = items.flatMap((item, index) => normalizeQuestion((item ?? {}) as RawQuestion, index) ? [] : [index + 1]);
+  return { questions, suggestedTitle: title || safeTitle(fileName), diagnostics: diagnostics("JSON", items.length, questions, incomplete, questions.length) };
 }
 
 function splitCsvLine(line: string, delimiter: string) {
@@ -80,64 +111,97 @@ function splitCsvLine(line: string, delimiter: string) {
 
 function parseCsv(source: string, fileName: string): ParsedUpload {
   const lines = source.replace(/^\uFEFF/, "").split(/\r?\n/).filter((line) => line.trim());
-  if (!lines.length) return { questions: [], suggestedTitle: safeTitle(fileName) };
+  if (!lines.length) return { questions: [], suggestedTitle: safeTitle(fileName), diagnostics: diagnostics("CSV", 0, [], [], 0) };
   const delimiter = (lines[0].match(/;/g)?.length ?? 0) > (lines[0].match(/,/g)?.length ?? 0) ? ";" : ",";
   const rows = lines.map((line) => splitCsvLine(line, delimiter));
-  const headers = rows[0].map((header) => header.toLowerCase().replace(/[\s_-]/g, ""));
-  const hasHeader = headers.some((header) => /question|คำถาม|โจทย์/.test(header));
+  const headers = rows[0].map((header) => header.toLowerCase().replace(/[\s_\-().]/g, ""));
+  const hasHeader = headers.some((header) => /question|คำถาม|โจทย์|ข้อสอบ/.test(header));
   const findColumn = (patterns: RegExp[], fallback: number) => {
     const found = headers.findIndex((header) => patterns.some((pattern) => pattern.test(header)));
     return found >= 0 ? found : fallback;
   };
-  const questionColumn = findColumn([/question/, /คำถาม/, /โจทย์/], 0);
+  const questionColumn = findColumn([/question/, /คำถาม/, /โจทย์/, /ข้อสอบ/], 0);
   const optionColumns = [
-    findColumn([/option1/, /choice1/, /^a$/, /ตัวเลือกก/], 1),
-    findColumn([/option2/, /choice2/, /^b$/, /ตัวเลือกข/], 2),
-    findColumn([/option3/, /choice3/, /^c$/, /ตัวเลือกค/], 3),
-    findColumn([/option4/, /choice4/, /^d$/, /ตัวเลือกง/], 4),
-  ];
-  const answerColumn = findColumn([/answer/, /correct/, /เฉลย/, /คำตอบ/], 5);
+    findColumn([/option1$/, /choice1$/, /^a$/, /^ก$/, /ตัวเลือก(?:ที่)?1$/, /ตัวเลือกก$/, /ข้อก$/], 1),
+    findColumn([/option2$/, /choice2$/, /^b$/, /^ข$/, /ตัวเลือก(?:ที่)?2$/, /ตัวเลือกข$/, /ข้อข$/], 2),
+    findColumn([/option3$/, /choice3$/, /^c$/, /^ค$/, /ตัวเลือก(?:ที่)?3$/, /ตัวเลือกค$/, /ข้อค$/], 3),
+    findColumn([/option4$/, /choice4$/, /^d$/, /^ง$/, /ตัวเลือก(?:ที่)?4$/, /ตัวเลือกง$/, /ข้อง$/], 4),
+    findColumn([/option5$/, /choice5$/, /^e$/, /^จ$/, /ตัวเลือก(?:ที่)?5$/, /ตัวเลือกจ$/, /ข้อจ$/], -1),
+    findColumn([/option6$/, /choice6$/, /^f$/, /^ฉ$/, /ตัวเลือก(?:ที่)?6$/, /ตัวเลือกฉ$/, /ข้อฉ$/], -1),
+  ].filter((column) => column >= 0);
+  const answerColumn = findColumn([/answer/, /correct/, /เฉลย/, /คำตอบ/, /key/], 5);
   const dataRows = hasHeader ? rows.slice(1) : rows;
-  const questions = dataRows.map((row, index) => normalizeQuestion({
-    question: row[questionColumn],
-    options: optionColumns.map((column) => row[column]),
-    answer: row[answerColumn],
-  }, index)).filter((item): item is UploadedQuestion => Boolean(item));
-  return { questions, suggestedTitle: safeTitle(fileName) };
+  const raw = dataRows.map((row) => ({ question: row[questionColumn], options: optionColumns.map((column) => row[column]), answer: row[answerColumn] }));
+  const questions = raw.map((item, index) => normalizeQuestion(item, index)).filter((item): item is UploadedQuestion => Boolean(item));
+  const incomplete = raw.flatMap((item, index) => normalizeQuestion(item, index) ? [] : [index + 1]);
+  return { questions, suggestedTitle: safeTitle(fileName), diagnostics: diagnostics("CSV", raw.length, questions, incomplete, questions.length) };
 }
 
-function parseText(source: string, fileName: string): ParsedUpload {
-  const clean = decodeEntities(source.replace(/\r/g, "").replace(/\u00a0/g, " "));
-  const answerMarker = clean.search(/(?:^|\n)\s*(?:เฉลย|คำตอบ|answer(?:\s*key)?)/im);
-  const questionText = answerMarker >= 0 ? clean.slice(0, answerMarker) : clean;
-  const keyText = answerMarker >= 0 ? clean.slice(answerMarker) : "";
+function lineOption(line: string) {
+  const cleaned = line.replace(/^\s*[-•▪◦*]\s*/, "").trim();
+  const match = cleaned.match(new RegExp(`^\\(?\\s*([${acceptedLabels}])\\s*\\)?\\s*(?:[.)、:：\\-]|\\s+)\\s*(.+)$`, "i"));
+  if (!match) return null;
+  const label = optionLabel(match[1], 0);
+  return { label, text: text(match[2]), numeric: /^\d$/.test(label) };
+}
+
+function lineQuestion(line: string) {
+  return line.trim().match(/^\s*(?:ข้อ\s*)?(\d{1,3})\s*(?:[.)、:：\-]\s*|\s+)(.+)$/i);
+}
+
+function answerMapFrom(source: string) {
   const answers = new Map<number, string>();
-  for (const line of keyText.split("\n")) {
-    const match = line.match(/^\s*(?:ข้อ\s*)?(\d+)\s*[.)\-:]?\s*([กขคงA-Da-d])\s*$/i);
-    if (match) answers.set(Number(match[1]), match[2]);
-  }
-  const starts = [...questionText.matchAll(/^\s*(?:ข้อ\s*)?(\d+)\s*[.)]\s*(.+)$/gim)];
+  const compact = source.replace(/\r/g, "\n");
+  const keyed = new RegExp(`(?:ข้อ\\s*)?(\\d{1,3})\\s*(?:[.)、:：\\-=]|\\s)*\\s*(?:เฉลย|คำตอบ|answer|correct)?\\s*[:：\\-]?\\s*\\(?\\s*([${acceptedLabels}])\\s*\\)?(?=$|[\\s,;|])`, "gi");
+  for (const match of compact.matchAll(keyed)) answers.set(Number(match[1]), optionLabel(match[2], 0));
+  return answers;
+}
+
+function parseText(source: string, fileName: string, sourceFormat: "TXT" | "DOCX" = "TXT"): ParsedUpload {
+  const clean = decodeEntities(source.replace(/\r/g, "").replace(/\u00a0/g, " "));
+  const lines = clean.split("\n").map((line) => line.trim()).filter(Boolean);
+  const answerStart = lines.findIndex((line) => /^(?:(?:เฉลย|คำตอบ)(?:\s|[:：\-]|$)|answer(?:\s*key)?\b|correct\s*answers?\b)/i.test(line));
+  const questionLines = answerStart >= 0 ? lines.slice(0, answerStart) : lines;
+  const answerLines = answerStart >= 0 ? lines.slice(answerStart) : [];
+  const answers = answerMapFrom(answerLines.join("\n"));
   const questions: UploadedQuestion[] = [];
-  for (let index = 0; index < starts.length; index += 1) {
-    const match = starts[index];
-    const questionNumber = Number(match[1]);
-    const begin = match.index ?? 0;
-    const end = index + 1 < starts.length ? (starts[index + 1].index ?? questionText.length) : questionText.length;
-    const block = questionText.slice(begin, end);
-    const lines = block.split("\n");
-    const optionStart = lines.findIndex((line) => /^\s*([กขคงA-Da-d])\s*[.)]\s+(.+)$/i.test(line));
-    if (optionStart < 0) continue;
-    const question = [match[2], ...lines.slice(1, optionStart)].join(" ");
-    const options: UploadedOption[] = lines.slice(optionStart)
-      .map((line) => line.match(/^\s*([กขคงA-Da-d])\s*[.)]\s+(.+)$/i))
-      .filter((item): item is RegExpMatchArray => Boolean(item))
-      .map((item) => ({ label: item[1], text: text(item[2]) }));
-    const inlineAnswer = block.match(/(?:เฉลย|คำตอบ|answer)\s*[:\-]?\s*([กขคงA-Da-d])/i)?.[1];
-    const answer = answerFor(inlineAnswer || answers.get(questionNumber), options);
-    const normalized = normalizeQuestion({ question, options, answer }, questions.length);
-    if (normalized) questions.push(normalized);
+  const incomplete: number[] = [];
+  let candidates = 0;
+  let current: DraftQuestion | null = null;
+
+  const finish = () => {
+    if (!current) return;
+    const normalized = normalizeQuestion({
+      question: current.question.join(" "),
+      options: current.options,
+      answer: current.inlineAnswer || answers.get(current.number),
+    }, questions.length);
+    if (normalized) questions.push(normalized); else incomplete.push(current.number);
+    current = null;
+  };
+
+  for (const line of questionLines) {
+    const inline = line.match(new RegExp(`(?:เฉลย|คำตอบ|answer|correct)\\s*[:：\\-]?\\s*\\(?\\s*([${acceptedLabels}])`, "i"));
+    if (current && inline) { current.inlineAnswer = optionLabel(inline[1], 0); continue; }
+    const option = lineOption(line);
+    if (current && option) {
+      const expectedNumber = current.options.length + 1;
+      if (!option.numeric || Number(option.label) === expectedNumber) {
+        current.options.push({ label: option.label, text: option.text });
+        continue;
+      }
+    }
+    const header = lineQuestion(line);
+    if (header) {
+      finish();
+      candidates += 1;
+      current = { number: Number(header[1]), question: [header[2]], options: [] };
+    } else if (current && !option) {
+      current.question.push(line);
+    }
   }
-  return { questions, suggestedTitle: safeTitle(fileName) };
+  finish();
+  return { questions, suggestedTitle: safeTitle(fileName), diagnostics: diagnostics(sourceFormat, candidates, questions, incomplete, answers.size) };
 }
 
 function findDocxEntry(bytes: Uint8Array) {
@@ -180,10 +244,12 @@ async function parseDocx(bytes: Uint8Array, fileName: string): Promise<ParsedUpl
   }
   const xml = decode.decode(xmlBytes)
     .replace(/<w:tab[^/]*\/>/g, " ")
-    .replace(/<w:br[^/]*\/>/g, "\n")
+    .replace(/<w:(?:br|cr)[^/]*\/>/g, "\n")
+    .replace(/<\/w:tc>/g, " ")
+    .replace(/<\/w:tr>/g, "\n")
     .replace(/<\/w:p>/g, "\n")
     .replace(/<[^>]+>/g, "");
-  return parseText(xml, fileName);
+  return parseText(xml, fileName, "DOCX");
 }
 
 export async function parseExamUpload(fileName: string, content: ArrayBuffer): Promise<ParsedUpload> {

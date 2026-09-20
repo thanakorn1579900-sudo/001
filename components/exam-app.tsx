@@ -10,6 +10,7 @@ import {
   ClipboardCheck,
   Clock3,
   DoorOpen,
+  Eye,
   Gauge,
   LoaderCircle,
   LockKeyhole,
@@ -538,20 +539,21 @@ function AdminPortal({ admin, password, setPassword, busy, error, uploadedExams,
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
   const [editing, setEditing] = useState<EditableExam | null>(null);
+  const [viewing, setViewing] = useState<EditableExam | null>(null);
   const [editorBusy, setEditorBusy] = useState(false);
   const [editorError, setEditorError] = useState("");
   const [deleteTarget, setDeleteTarget] = useState<UploadedExam | null>(null);
 
-  const loadEditor = async (id: string) => {
+  const loadExam = async (id: string, mode: "view" | "edit") => {
     setEditorBusy(true);
     setEditorError("");
     try {
       const response = await fetch(`/api/admin/exams/${encodeURIComponent(id)}`, { cache: "no-store" });
       const data = await response.json() as { exam?: EditableExam; error?: string };
-      if (!response.ok || !data.exam) throw new Error(data.error || "ไม่สามารถเปิดข้อสอบเพื่อแก้ไขได้");
-      setEditing(data.exam);
+      if (!response.ok || !data.exam) throw new Error(data.error || "ไม่สามารถเปิดข้อสอบได้");
+      if (mode === "view") setViewing(data.exam); else setEditing(data.exam);
     } catch (loadError) {
-      setEditorError(loadError instanceof Error ? loadError.message : "ไม่สามารถเปิดข้อสอบเพื่อแก้ไขได้");
+      setEditorError(loadError instanceof Error ? loadError.message : "ไม่สามารถเปิดข้อสอบได้");
     } finally {
       setEditorBusy(false);
     }
@@ -616,6 +618,31 @@ function AdminPortal({ admin, password, setPassword, busy, error, uploadedExams,
       questions: [...current.questions, { id: current.questions.length + 1, question: "", options: ["ก", "ข", "ค", "ง"].map((label) => ({ label, text: "" })), answer: "ก" }],
     } : current);
   };
+
+  const addOption = (questionIndex: number) => {
+    setEditing((current) => current ? {
+      ...current,
+      questions: current.questions.map((question, index) => {
+        if (index !== questionIndex || question.options.length >= 6) return question;
+        const labels = question.options.map((option) => option.label);
+        const next = labels.every((label) => /^[A-F]$/.test(label)) ? String.fromCharCode(65 + labels.length)
+          : labels.every((label) => /^\d+$/.test(label)) ? String(labels.length + 1)
+            : ["ก", "ข", "ค", "ง", "จ", "ฉ"][labels.length];
+        return { ...question, options: [...question.options, { label: next, text: "" }] };
+      }),
+    } : current);
+  };
+
+  const removeOption = (questionIndex: number, optionIndex: number) => {
+    setEditing((current) => current ? {
+      ...current,
+      questions: current.questions.map((question, index) => {
+        if (index !== questionIndex || question.options.length <= 2) return question;
+        const options = question.options.filter((_, index) => index !== optionIndex);
+        return { ...question, options, answer: options.some((option) => option.label === question.answer) ? question.answer : options[0].label };
+      }),
+    } : current);
+  };
   if (!admin?.authenticated) {
     return (
       <main className="grid min-h-screen place-items-center px-4">
@@ -646,7 +673,7 @@ function AdminPortal({ admin, password, setPassword, busy, error, uploadedExams,
             </form>
           </section>
 
-          <section className="rounded-2xl border border-[#d8e5e5] bg-white p-6"><div className="flex items-center justify-between gap-4"><div><h2 className="text-lg font-bold text-[#173f47]">ข้อสอบที่อัปโหลด</h2><p className="mt-1 text-sm text-[#526b73]">นักเรียนจะเห็นรายวิชาเหล่านี้เมื่อเปิดระบบสอบ</p></div><Badge variant="outline" className="border-[#9acfc3] bg-[#e9f6f1] text-[#17604f]">{uploadedExams.length} ชุด</Badge></div>{uploadedExams.length ? <div className="mt-4 divide-y divide-[#e0ecec]">{uploadedExams.map((exam) => <div key={exam.id} className="flex flex-col gap-3 py-4 first:pt-0 last:pb-0 sm:flex-row sm:items-start sm:justify-between"><div><p className="font-semibold text-[#173f47]">{exam.title}</p><p className="mt-1 text-sm leading-5 text-[#526b73]">{exam.description}</p><p className="mt-1 text-xs text-[#6e8589]">ไฟล์ {exam.sourceFileName}</p></div><div className="flex items-center gap-2"><Badge className="shrink-0 bg-[#e6f2ef] text-[#0e5965] hover:bg-[#e6f2ef]">{exam.questionCount} ข้อ</Badge><Button type="button" variant="outline" size="sm" disabled={editorBusy} onClick={() => void loadEditor(exam.id)}><Pencil /> แก้ไข</Button><Button type="button" variant="outline" size="sm" disabled={editorBusy} onClick={() => { setEditorError(""); setDeleteTarget(exam); }} className="border-[#e2aaa3] text-[#9b3d32] hover:bg-[#fff1ef] hover:text-[#7f3027]"><Trash2 /> ลบ</Button></div></div>)}</div> : <p className="mt-4 rounded-xl bg-[#f3f7f7] px-4 py-3 text-sm text-[#5d7479]">ยังไม่มีข้อสอบที่อัปโหลด</p>}</section>
+          <section className="rounded-2xl border border-[#d8e5e5] bg-white p-6"><div className="flex items-center justify-between gap-4"><div><h2 className="text-lg font-bold text-[#173f47]">ข้อสอบที่อัปโหลด</h2><p className="mt-1 text-sm text-[#526b73]">ตรวจสอบข้อสอบทีละข้อ แก้ไข หรือลบก่อนเปิดให้นักเรียนสอบ</p></div><Badge variant="outline" className="border-[#9acfc3] bg-[#e9f6f1] text-[#17604f]">{uploadedExams.length} ชุด</Badge></div>{uploadedExams.length ? <div className="mt-4 divide-y divide-[#e0ecec]">{uploadedExams.map((exam) => <div key={exam.id} className="flex flex-col gap-3 py-4 first:pt-0 last:pb-0 sm:flex-row sm:items-start sm:justify-between"><div><p className="font-semibold text-[#173f47]">{exam.title}</p><p className="mt-1 text-sm leading-5 text-[#526b73]">{exam.description}</p><p className="mt-1 text-xs text-[#6e8589]">ไฟล์ {exam.sourceFileName}</p></div><div className="flex flex-wrap items-center gap-2"><Badge className="shrink-0 bg-[#e6f2ef] text-[#0e5965] hover:bg-[#e6f2ef]">{exam.questionCount} ข้อ</Badge><Button type="button" variant="outline" size="sm" disabled={editorBusy} onClick={() => void loadExam(exam.id, "view")}><Eye /> ดูข้อสอบ</Button><Button type="button" variant="outline" size="sm" disabled={editorBusy} onClick={() => void loadExam(exam.id, "edit")}><Pencil /> แก้ไข</Button><Button type="button" variant="outline" size="sm" disabled={editorBusy} onClick={() => { setEditorError(""); setDeleteTarget(exam); }} className="border-[#e2aaa3] text-[#9b3d32] hover:bg-[#fff1ef] hover:text-[#7f3027]"><Trash2 /> ลบ</Button></div></div>)}</div> : <p className="mt-4 rounded-xl bg-[#f3f7f7] px-4 py-3 text-sm text-[#5d7479]">ยังไม่มีข้อสอบที่อัปโหลด</p>}</section>
 
           {editorError ? <p className="rounded-xl border border-[#e9c48e] bg-[#fff6e5] px-4 py-3 text-sm font-medium text-[#8b511b]">{editorError}</p> : null}
           <div className="rounded-xl bg-[#edf5f4] p-4 text-sm leading-6 text-[#365860]">การปิดระบบจะหยุดการเข้าถึงข้อสอบสำหรับผู้เรียนรายใหม่ทันที แต่ผู้ที่กำลังทำข้อสอบอยู่ยังส่งคำตอบได้ตามปกติ</div>
@@ -656,12 +683,15 @@ function AdminPortal({ admin, password, setPassword, busy, error, uploadedExams,
         <DialogContent className="max-h-[88vh] overflow-y-auto sm:max-w-3xl">
           <DialogHeader><DialogTitle>แก้ไขชุดข้อสอบ</DialogTitle><DialogDescription>แก้ไขชื่อ รายละเอียด คำถาม ตัวเลือก และเฉลยได้ แล้วกดบันทึกเพื่อใช้ตรวจคะแนนอัตโนมัติ</DialogDescription></DialogHeader>
           {editing ? <div className="space-y-5"><div className="grid gap-4 sm:grid-cols-2"><div className="space-y-2"><Label htmlFor="editor-title">ชื่อชุดข้อสอบ</Label><Input id="editor-title" value={editing.title} onChange={(event) => setEditing({ ...editing, title: event.target.value })} /></div><div className="space-y-2"><Label htmlFor="editor-description">คำอธิบาย</Label><Input id="editor-description" value={editing.description} onChange={(event) => setEditing({ ...editing, description: event.target.value })} /></div></div>
-            <div className="space-y-4">{editing.questions.map((question, questionIndex) => <section key={`${question.id}-${questionIndex}`} className="rounded-2xl border border-[#d5e3e3] bg-[#fbfefe] p-4"><div className="flex items-center justify-between gap-3"><p className="font-bold text-[#173f47]">ข้อ {questionIndex + 1}</p><Button type="button" variant="ghost" size="sm" disabled={editing.questions.length === 1 || editorBusy} onClick={() => removeQuestion(questionIndex)} className="text-[#9b3d32] hover:bg-[#fff1ef] hover:text-[#7f3027]"><Trash2 /> ลบข้อนี้</Button></div><div className="mt-3 space-y-2"><Label htmlFor={`editor-question-${questionIndex}`}>คำถาม</Label><Textarea id={`editor-question-${questionIndex}`} value={question.question} onChange={(event) => updateQuestion(questionIndex, { question: event.target.value })} className="min-h-20 bg-white" /></div><div className="mt-4 grid gap-3 sm:grid-cols-2">{question.options.map((option, optionIndex) => <div key={option.label} className="space-y-2"><Label htmlFor={`editor-option-${questionIndex}-${optionIndex}`}>ตัวเลือก {option.label}</Label><Input id={`editor-option-${questionIndex}-${optionIndex}`} value={option.text} onChange={(event) => updateOption(questionIndex, optionIndex, event.target.value)} /></div>)}</div><div className="mt-4 flex items-center gap-3"><Label htmlFor={`editor-answer-${questionIndex}`}>เฉลย</Label><select id={`editor-answer-${questionIndex}`} value={question.answer} onChange={(event) => updateQuestion(questionIndex, { answer: event.target.value })} className="h-9 rounded-md border border-input bg-white px-3 text-sm text-[#173f47]">{question.options.map((option) => <option key={option.label} value={option.label}>{option.label}. {option.text || "ตัวเลือก"}</option>)}</select></div></section>)}</div>
+            <div className="space-y-4">{editing.questions.map((question, questionIndex) => <section key={`${question.id}-${questionIndex}`} className="rounded-2xl border border-[#d5e3e3] bg-[#fbfefe] p-4"><div className="flex items-center justify-between gap-3"><p className="font-bold text-[#173f47]">ข้อ {questionIndex + 1}</p><Button type="button" variant="ghost" size="sm" disabled={editing.questions.length === 1 || editorBusy} onClick={() => removeQuestion(questionIndex)} className="text-[#9b3d32] hover:bg-[#fff1ef] hover:text-[#7f3027]"><Trash2 /> ลบข้อนี้</Button></div><div className="mt-3 space-y-2"><Label htmlFor={`editor-question-${questionIndex}`}>คำถาม</Label><Textarea id={`editor-question-${questionIndex}`} value={question.question} onChange={(event) => updateQuestion(questionIndex, { question: event.target.value })} className="min-h-20 bg-white" /></div><div className="mt-4 grid gap-3 sm:grid-cols-2">{question.options.map((option, optionIndex) => <div key={option.label} className="space-y-2 rounded-xl bg-white p-2"><div className="flex items-center justify-between gap-2"><Label htmlFor={`editor-option-${questionIndex}-${optionIndex}`}>ตัวเลือก {option.label}</Label><button type="button" aria-label={`ลบตัวเลือก ${option.label}`} disabled={question.options.length <= 2 || editorBusy} onClick={() => removeOption(questionIndex, optionIndex)} className="text-xs font-semibold text-[#9b3d32] disabled:opacity-40">ลบ</button></div><Input id={`editor-option-${questionIndex}-${optionIndex}`} value={option.text} onChange={(event) => updateOption(questionIndex, optionIndex, event.target.value)} /></div>)}</div><Button type="button" variant="outline" size="sm" disabled={question.options.length >= 6 || editorBusy} onClick={() => addOption(questionIndex)} className="mt-3"><Plus /> เพิ่มตัวเลือก</Button><div className="mt-4 flex items-center gap-3"><Label htmlFor={`editor-answer-${questionIndex}`}>เฉลย</Label><select id={`editor-answer-${questionIndex}`} value={question.answer} onChange={(event) => updateQuestion(questionIndex, { answer: event.target.value })} className="h-9 rounded-md border border-input bg-white px-3 text-sm text-[#173f47]">{question.options.map((option) => <option key={option.label} value={option.label}>{option.label}. {option.text || "ตัวเลือก"}</option>)}</select></div></section>)}</div>
             <Button type="button" variant="outline" disabled={editorBusy || editing.questions.length >= 200} onClick={addQuestion}><Plus /> เพิ่มข้อสอบ</Button>
             {editorError ? <p className="rounded-xl border border-[#e9c48e] bg-[#fff6e5] px-4 py-3 text-sm font-medium text-[#8b511b]">{editorError}</p> : null}
           </div> : null}
           <DialogFooter><Button type="button" variant="outline" disabled={editorBusy} onClick={() => { setEditing(null); setEditorError(""); }}>ยกเลิก</Button><Button type="button" disabled={editorBusy} onClick={() => void saveEditor()} className="bg-[#0e5965]">{editorBusy ? <LoaderCircle className="animate-spin" /> : <Pencil />} บันทึกการแก้ไข</Button></DialogFooter>
         </DialogContent>
+      </Dialog>
+      <Dialog open={Boolean(viewing)} onOpenChange={(open) => { if (!open) setViewing(null); }}>
+        <DialogContent className="max-h-[88vh] overflow-y-auto sm:max-w-3xl"><DialogHeader><DialogTitle>ดูข้อสอบ: {viewing?.title}</DialogTitle><DialogDescription>รายการนี้แสดงเฉพาะในแอดมิน พร้อมเฉลยสำหรับตรวจทานก่อนเปิดสอบ</DialogDescription></DialogHeader>{viewing ? <div className="space-y-4">{viewing.questions.map((question, index) => <article key={question.id} className="rounded-2xl border border-[#d5e3e3] bg-[#fbfefe] p-4"><p className="text-sm font-semibold text-[#0e5965]">ข้อ {index + 1}</p><p className="mt-2 font-bold leading-7 text-[#173f47]">{question.question}</p><div className="mt-3 grid gap-2 sm:grid-cols-2">{question.options.map((option) => <p key={option.label} className={`rounded-lg border px-3 py-2 text-sm leading-6 ${option.label === question.answer ? "border-[#8fcabd] bg-[#e7f4f1] font-semibold text-[#17604f]" : "border-[#dbe7e7] bg-white text-[#365860]"}`}><span className="mr-2 font-bold">{option.label}.</span>{option.text}{option.label === question.answer ? <span className="ml-2 text-xs">เฉลย</span> : null}</p>)}</div></article>)}</div> : null}<DialogFooter><Button type="button" onClick={() => setViewing(null)}>ปิด</Button></DialogFooter></DialogContent>
       </Dialog>
       <Dialog open={Boolean(deleteTarget)} onOpenChange={(open) => { if (!open && !editorBusy) setDeleteTarget(null); }}>
         <DialogContent className="sm:max-w-md"><DialogHeader><DialogTitle className="flex items-center gap-2 text-[#9b3d32]"><Trash2 className="size-5" /> ลบชุดข้อสอบ?</DialogTitle><DialogDescription className="leading-6">ต้องการลบ “{deleteTarget?.title}” ใช่หรือไม่? ไฟล์ต้นฉบับและข้อสอบชุดนี้จะถูกลบออกจากระบบ</DialogDescription></DialogHeader>{editorError ? <p className="rounded-xl border border-[#e9c48e] bg-[#fff6e5] px-4 py-3 text-sm font-medium text-[#8b511b]">{editorError}</p> : null}<DialogFooter><Button type="button" variant="outline" disabled={editorBusy} onClick={() => setDeleteTarget(null)}>ยกเลิก</Button><Button type="button" disabled={editorBusy} onClick={() => void deleteExam()} className="bg-[#9b3d32] hover:bg-[#7f3027]">{editorBusy ? <LoaderCircle className="animate-spin" /> : <Trash2 />} ยืนยันลบ</Button></DialogFooter></DialogContent>

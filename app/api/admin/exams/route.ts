@@ -34,7 +34,8 @@ export async function POST(request: Request) {
 
     const parsed = await parseExamUpload(file.name, await file.arrayBuffer());
     if (!parsed.questions.length) {
-      return Response.json({ error: "ไม่พบข้อสอบที่มีตัวเลือกและเฉลยครบ กรุณาตรวจรูปแบบไฟล์ก่อนอัปโหลด" }, { status: 400 });
+      const found = parsed.diagnostics.candidates;
+      return Response.json({ error: found ? `ตรวจพบโจทย์ ${found} ข้อ แต่ยังไม่พบข้อที่มีตัวเลือกและเฉลยครบ กรุณาตรวจรูปแบบไฟล์` : "ไม่พบโจทย์ในไฟล์ กรุณาตรวจรูปแบบไฟล์ก่อนอัปโหลด" }, { status: 400 });
     }
     if (parsed.questions.length > 200) return Response.json({ error: "หนึ่งไฟล์มีข้อสอบได้ไม่เกิน 200 ข้อ" }, { status: 400 });
 
@@ -45,9 +46,13 @@ export async function POST(request: Request) {
     const sourceObjectKey = `exam-uploads/${id}/${sourceFileName}`;
     await uploadsBucket().put(sourceObjectKey, file, { httpMetadata: { contentType: file.type || "application/octet-stream" } });
     await saveUploadedExam({ id, title, description, sourceFileName, sourceObjectKey, questions: parsed.questions });
+    const missed = parsed.diagnostics.incomplete.length
+      ? ` พบข้อที่ยังไม่ครบ ${parsed.diagnostics.incomplete.slice(0, 8).join(", ")}${parsed.diagnostics.incomplete.length > 8 ? "…" : ""} กรุณาตรวจสอบในหน้าแก้ไข`
+      : "";
     return Response.json({
       exam: { id, title, description, questionCount: parsed.questions.length, sourceFileName },
-      message: `เพิ่มข้อสอบ ${parsed.questions.length} ข้อแล้ว ระบบจะตรวจคะแนนจากเฉลยในไฟล์โดยอัตโนมัติ`,
+      diagnostics: parsed.diagnostics,
+      message: `ตรวจพบ ${parsed.diagnostics.candidates} ข้อ เพิ่มข้อสอบ ${parsed.questions.length} ข้อแล้ว ระบบจะตรวจคะแนนจากเฉลยในไฟล์โดยอัตโนมัติ${missed}`,
     }, { status: 201 });
   } catch (error) {
     const message = error instanceof Error ? error.message : "ไม่สามารถประมวลผลไฟล์ข้อสอบได้";
