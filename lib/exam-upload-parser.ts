@@ -15,14 +15,25 @@ export type ParsedUpload = {
 };
 
 type RawQuestion = Record<string, unknown>;
-type DraftQuestion = { number: number; question: string[]; options: UploadedOption[]; inlineAnswer?: string };
+type DraftQuestion = { number: number; question: string[]; options: UploadedOption[]; inlineAnswer?: string; markedAnswers: string[] };
 
 const thaiLabels = ["ก", "ข", "ค", "ง", "จ", "ฉ"];
 const decode = new TextDecoder();
 const acceptedLabels = "กขคงจฉA-Fa-f1-6";
+// Private-use markers survive DOCX-to-text conversion without appearing in saved questions.
+const markedStart = "\uE000";
+const markedEnd = "\uE001";
+
+function withoutMarkers(value: string) {
+  return value.replaceAll(markedStart, "").replaceAll(markedEnd, "");
+}
+
+function isMarked(value: string) {
+  return value.includes(markedStart);
+}
 
 function text(value: unknown, maxLength = 2_000) {
-  return typeof value === "string" ? value.replace(/\s+/g, " ").trim().slice(0, maxLength) : "";
+  return typeof value === "string" ? withoutMarkers(value).replace(/\s+/g, " ").trim().slice(0, maxLength) : "";
 }
 
 function safeTitle(fileName: string) {
@@ -138,20 +149,21 @@ function parseCsv(source: string, fileName: string): ParsedUpload {
 }
 
 function lineOption(line: string) {
-  const cleaned = line.replace(/^\s*[-•▪◦*]\s*/, "").trim();
+  const marked = isMarked(line);
+  const cleaned = withoutMarkers(line).replace(/^\s*[-•▪◦*]\s*/, "").trim();
   const match = cleaned.match(new RegExp(`^\\(?\\s*([${acceptedLabels}])\\s*\\)?\\s*(?:[.)、:：\\-]|\\s+)\\s*(.+)$`, "i"));
   if (!match) return null;
   const label = optionLabel(match[1], 0);
-  return { label, text: text(match[2]), numeric: /^\d$/.test(label) };
+  return { label, text: text(match[2]), numeric: /^\d$/.test(label), marked };
 }
 
 function lineQuestion(line: string) {
-  return line.trim().match(/^\s*(?:ข้อ\s*)?(\d{1,3})\s*(?:[.)、:：\-]\s*|\s+)(.+)$/i);
+  return withoutMarkers(line).trim().match(/^\s*(?:ข้อ(?:ที่)?\s*)?(\d{1,3})\s*(?:[.)、:：\-]\s*|\s+)(.+)$/i);
 }
 
 function answerMapFrom(source: string) {
   const answers = new Map<number, string>();
-  const compact = source.replace(/\r/g, "\n");
+  const compact = withoutMarkers(source).replace(/\r/g, "\n");
   const keyed = new RegExp(`(?:ข้อ\\s*)?(\\d{1,3})\\s*(?:[.)、:：\\-=]|\\s)*\\s*(?:เฉลย|คำตอบ|answer|correct)?\\s*[:：\\-]?\\s*\\(?\\s*([${acceptedLabels}])\\s*\\)?(?=$|[\\s,;|])`, "gi");
   for (const match of compact.matchAll(keyed)) answers.set(Number(match[1]), optionLabel(match[2], 0));
   return answers;
@@ -160,7 +172,7 @@ function answerMapFrom(source: string) {
 function parseText(source: string, fileName: string, sourceFormat: "TXT" | "DOCX" = "TXT"): ParsedUpload {
   const clean = decodeEntities(source.replace(/\r/g, "").replace(/\u00a0/g, " "));
   const lines = clean.split("\n").map((line) => line.trim()).filter(Boolean);
-  const answerStart = lines.findIndex((line) => /^(?:(?:เฉลย|คำตอบ)(?:\s|[:：\-]|$)|answer(?:\s*key)?\b|correct\s*answers?\b)/i.test(line));
+  const answerStart = lines.findIndex((line) => /^(?:(?:เฉลย|คำตอบ)(?:\s|[:：\-]|$)|answer(?:\s*key)?\b|correct\s*answers?\b)/i.test(withoutMarkers(line)));
   const questionLines = answerStart >= 0 ? lines.slice(0, answerStart) : lines;
   const answerLines = answerStart >= 0 ? lines.slice(answerStart) : [];
   const answers = answerMapFrom(answerLines.join("\n"));
@@ -174,20 +186,23 @@ function parseText(source: string, fileName: string, sourceFormat: "TXT" | "DOCX
     const normalized = normalizeQuestion({
       question: current.question.join(" "),
       options: current.options,
-      answer: current.inlineAnswer || answers.get(current.number),
+      // An explicit inline key or an answer-key section wins over presentation styling.
+      answer: current.inlineAnswer || answers.get(current.number) || (current.markedAnswers.length === 1 ? current.markedAnswers[0] : ""),
     }, questions.length);
     if (normalized) questions.push(normalized); else incomplete.push(current.number);
     current = null;
   };
 
   for (const line of questionLines) {
-    const inline = line.match(new RegExp(`(?:เฉลย|คำตอบ|answer|correct)\\s*[:：\\-]?\\s*\\(?\\s*([${acceptedLabels}])`, "i"));
+    const cleanLine = withoutMarkers(line);
+    const inline = cleanLine.match(new RegExp(`(?:เฉลย|คำตอบ|answer|ans\\.?|correct)\\s*[:：\\-]?\\s*\\(?\\s*([${acceptedLabels}])`, "i"));
     if (current && inline) { current.inlineAnswer = optionLabel(inline[1], 0); continue; }
     const option = lineOption(line);
     if (current && option) {
       const expectedNumber = current.options.length + 1;
       if (!option.numeric || Number(option.label) === expectedNumber) {
         current.options.push({ label: option.label, text: option.text });
+        if (option.marked && !current.markedAnswers.includes(option.label)) current.markedAnswers.push(option.label);
         continue;
       }
     }
@@ -195,7 +210,7 @@ function parseText(source: string, fileName: string, sourceFormat: "TXT" | "DOCX
     if (header) {
       finish();
       candidates += 1;
-      current = { number: Number(header[1]), question: [header[2]], options: [] };
+      current = { number: Number(header[1]), question: [header[2]], options: [], markedAnswers: [] };
     } else if (current && !option) {
       current.question.push(line);
     }
@@ -232,6 +247,44 @@ function findDocxEntry(bytes: Uint8Array) {
   throw new Error("ไม่พบเนื้อหาในไฟล์ DOCX");
 }
 
+function isRed(value: string) {
+  const color = value.replace(/^#/, "").toUpperCase();
+  if (/^(?:RED|DARKRED)$/.test(color)) return true;
+  if (!/^[\dA-F]{6}$/.test(color)) return false;
+  const red = Number.parseInt(color.slice(0, 2), 16);
+  const green = Number.parseInt(color.slice(2, 4), 16);
+  const blue = Number.parseInt(color.slice(4, 6), 16);
+  return red >= 150 && red >= green * 1.6 && red >= blue * 1.6 && green <= 120 && blue <= 120;
+}
+
+function isAnswerMarkedDocxRun(run: string) {
+  const color = run.match(/<w:color\b[^>]*?\bw:val\s*=\s*["']([^"']+)["'][^>]*>/i)?.[1];
+  if (color && isRed(color)) return true;
+  if (/<w:highlight\b[^>]*?\bw:val\s*=\s*["'](?:red|darkRed)["'][^>]*>/i.test(run)) return true;
+  // Word's "All caps" and "Small caps" formatting are explicit author intent;
+  // use them as an answer marker without guessing from ordinary capital letters.
+  return /<w:(?:caps|smallCaps)\b[^>]*?(?:\/>|\bw:val\s*=\s*["'](?:1|true|on)["'][^>]*>)/i.test(run);
+}
+
+function docxTextWithAnswerMarkers(xml: string) {
+  const withRuns = xml.replace(/<w:r\b[\s\S]*?<\/w:r>/g, (run) => {
+    const runText = run
+      .replace(/<w:tab\b[^>]*\/>/g, " ")
+      .replace(/<w:(?:br|cr)\b[^>]*\/>/g, "\n")
+      .replace(/<w:t\b[^>]*>/g, "")
+      .replace(/<\/w:t>/g, "")
+      .replace(/<[^>]+>/g, "");
+    return runText && isAnswerMarkedDocxRun(run) ? `${markedStart}${runText}${markedEnd}` : runText;
+  });
+  return withRuns
+    .replace(/<w:tab\b[^>]*\/>/g, " ")
+    .replace(/<w:(?:br|cr)\b[^>]*\/>/g, "\n")
+    .replace(/<\/w:tc>/g, " ")
+    .replace(/<\/w:tr>/g, "\n")
+    .replace(/<\/w:p>/g, "\n")
+    .replace(/<[^>]+>/g, "");
+}
+
 async function parseDocx(bytes: Uint8Array, fileName: string): Promise<ParsedUpload> {
   const entry = findDocxEntry(bytes);
   let xmlBytes = entry.data;
@@ -242,13 +295,7 @@ async function parseDocx(bytes: Uint8Array, fileName: string): Promise<ParsedUpl
   } else if (entry.compression !== 0) {
     throw new Error("รูปแบบการบีบอัดในไฟล์ DOCX ไม่รองรับ");
   }
-  const xml = decode.decode(xmlBytes)
-    .replace(/<w:tab[^/]*\/>/g, " ")
-    .replace(/<w:(?:br|cr)[^/]*\/>/g, "\n")
-    .replace(/<\/w:tc>/g, " ")
-    .replace(/<\/w:tr>/g, "\n")
-    .replace(/<\/w:p>/g, "\n")
-    .replace(/<[^>]+>/g, "");
+  const xml = docxTextWithAnswerMarkers(decode.decode(xmlBytes));
   return parseText(xml, fileName, "DOCX");
 }
 
