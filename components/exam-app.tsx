@@ -13,12 +13,10 @@ import {
   Gauge,
   LoaderCircle,
   LockKeyhole,
-  LogOut,
   Power,
   RefreshCw,
   Settings2,
   ShieldCheck,
-  UserPlus,
   UserRoundCheck,
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
@@ -55,13 +53,8 @@ type Result = {
   subject?: string;
   message?: string;
 };
-type StudentProfile = { name: string; classLevel: string; studentId: string };
-type Account = {
-  authenticated: boolean;
-  profile: StudentProfile | null;
-  isAdmin: boolean;
-  examEnabled: boolean;
-};
+type SystemStatus = { examEnabled: boolean };
+type AdminStatus = { authenticated: boolean; examEnabled: boolean };
 
 const formatDuration = (seconds: number) => {
   const h = Math.floor(seconds / 3600).toString().padStart(2, "0");
@@ -70,13 +63,12 @@ const formatDuration = (seconds: number) => {
   return `${h}:${m}:${s}`;
 };
 
-export function ExamApp({ viewerName, signOutUrl }: { viewerName: string; signOutUrl: string }) {
-  const [account, setAccount] = useState<Account | null>(null);
+export function ExamApp() {
+  const [system, setSystem] = useState<SystemStatus | null>(null);
+  const [admin, setAdminState] = useState<AdminStatus | null>(null);
   const [portal, setPortal] = useState<"student" | "admin">("student");
   const [accountError, setAccountError] = useState("");
-  const [savingAccount, setSavingAccount] = useState(false);
-  const [registration, setRegistration] = useState({ name: viewerName, classLevel: "", studentId: "" });
-  const [setupToken, setSetupToken] = useState("");
+  const [adminPassword, setAdminPassword] = useState("");
   const [adminBusy, setAdminBusy] = useState(false);
   const [exam, setExam] = useState<ExamData | null>(null);
   const [loadError, setLoadError] = useState("");
@@ -97,23 +89,33 @@ export function ExamApp({ viewerName, signOutUrl }: { viewerName: string; signOu
   const fullScreenExpected = useRef(false);
   const startTime = useRef(0);
 
-  const refreshAccount = async () => {
+  const refreshSystem = async () => {
     setAccountError("");
     try {
-      const response = await fetch("/api/account", { cache: "no-store" });
-      const data = await response.json() as Account & { error?: string };
-      if (!response.ok || !data.authenticated) throw new Error(data.error || "ไม่สามารถตรวจสอบบัญชีผู้ใช้ได้");
-      setAccount(data);
-      if (data.profile) setForm(data.profile);
+      const response = await fetch("/api/system", { cache: "no-store" });
+      const data = await response.json() as SystemStatus & { error?: string };
+      if (!response.ok) throw new Error(data.error || "ไม่สามารถตรวจสอบสถานะระบบสอบได้");
+      setSystem(data);
     } catch (error) {
-      setAccountError(error instanceof Error ? error.message : "ไม่สามารถตรวจสอบบัญชีผู้ใช้ได้");
+      setAccountError(error instanceof Error ? error.message : "ไม่สามารถตรวจสอบสถานะระบบสอบได้");
     }
   };
 
-  useEffect(() => { void refreshAccount(); }, []);
+  const refreshAdmin = async () => {
+    try {
+      const response = await fetch("/api/admin", { cache: "no-store" });
+      const data = await response.json() as AdminStatus & { error?: string };
+      if (!response.ok) throw new Error(data.error || "ไม่สามารถตรวจสอบสิทธิ์แอดมินได้");
+      setAdminState(data);
+    } catch (error) {
+      setAccountError(error instanceof Error ? error.message : "ไม่สามารถตรวจสอบสิทธิ์แอดมินได้");
+    }
+  };
+
+  useEffect(() => { void refreshSystem(); }, []);
 
   useEffect(() => {
-    if (!account?.profile || account.isAdmin || !account.examEnabled) return;
+    if (!system?.examEnabled) return;
     let cancelled = false;
     setExam(null);
     setLoadError("");
@@ -125,7 +127,7 @@ export function ExamApp({ viewerName, signOutUrl }: { viewerName: string; signOu
       .then((data) => !cancelled && setExam(data))
       .catch(() => !cancelled && setLoadError("ไม่สามารถโหลดข้อสอบได้ กรุณาลองใหม่"));
     return () => { cancelled = true; };
-  }, [selectedSubjectId, account?.profile?.studentId, account?.isAdmin, account?.examEnabled]);
+  }, [selectedSubjectId, system?.examEnabled]);
 
   useEffect(() => {
     if (screen !== "exam") return;
@@ -201,39 +203,19 @@ export function ExamApp({ viewerName, signOutUrl }: { viewerName: string; signOu
   const currentQuestion = exam?.questions[currentIndex];
   const progress = exam ? (answeredCount / exam.questions.length) * 100 : 0;
 
-  const registerStudent = async (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
-    setSavingAccount(true);
-    setAccountError("");
-    try {
-      const response = await fetch("/api/account", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify(registration),
-      });
-      const data = await response.json() as { error?: string };
-      if (!response.ok) throw new Error(data.error || "ลงทะเบียนไม่สำเร็จ");
-      await refreshAccount();
-    } catch (error) {
-      setAccountError(error instanceof Error ? error.message : "ลงทะเบียนไม่สำเร็จ");
-    } finally {
-      setSavingAccount(false);
-    }
-  };
-
-  const setAdmin = async (action: "setup" | "setExamEnabled", enabled?: boolean) => {
+  const setAdmin = async (action: "login" | "logout" | "setExamEnabled", enabled?: boolean) => {
     setAdminBusy(true);
     setAccountError("");
     try {
       const response = await fetch("/api/admin", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify(action === "setup" ? { action, setupToken } : { action, enabled }),
+        body: JSON.stringify(action === "login" ? { action, password: adminPassword } : action === "setExamEnabled" ? { action, enabled } : { action }),
       });
       const data = await response.json() as { error?: string };
       if (!response.ok) throw new Error(data.error || "ดำเนินการไม่สำเร็จ");
-      setSetupToken("");
-      await refreshAccount();
+      setAdminPassword("");
+      await Promise.all([refreshAdmin(), refreshSystem()]);
     } catch (error) {
       setAccountError(error instanceof Error ? error.message : "ดำเนินการไม่สำเร็จ");
     } finally {
@@ -300,26 +282,22 @@ export function ExamApp({ viewerName, signOutUrl }: { viewerName: string; signOu
     }
   };
 
-  if (!account) {
-    return <Notice icon={<LoaderCircle className="animate-spin" />} title="กำลังตรวจสอบบัญชี" message={accountError || "โปรดรอสักครู่"} action={accountError ? "ลองใหม่" : undefined} onAction={accountError ? () => void refreshAccount() : undefined} />;
+  if (!system) {
+    return <Notice icon={<LoaderCircle className="animate-spin" />} title="กำลังตรวจสอบสถานะระบบสอบ" message={accountError || "โปรดรอสักครู่"} action={accountError ? "ลองใหม่" : undefined} onAction={accountError ? () => void refreshSystem() : undefined} />;
   }
 
-  if (portal === "admin" || account.isAdmin) {
-    return <AdminPortal account={account} signOutUrl={signOutUrl} setupToken={setupToken} setSetupToken={setSetupToken} busy={adminBusy} error={accountError} onBack={() => { setPortal("student"); setAccountError(""); }} onSetup={() => void setAdmin("setup")} onSetEnabled={(enabled) => void setAdmin("setExamEnabled", enabled)} />;
+  if (portal === "admin") {
+    return <AdminPortal admin={admin} password={adminPassword} setPassword={setAdminPassword} busy={adminBusy} error={accountError} onBack={() => { setPortal("student"); setAccountError(""); }} onLogin={() => void setAdmin("login")} onLogout={() => void setAdmin("logout")} onSetEnabled={(enabled) => void setAdmin("setExamEnabled", enabled)} />;
   }
 
-  if (!account.profile) {
-    return <RegistrationPanel viewerName={viewerName} registration={registration} setRegistration={setRegistration} busy={savingAccount} error={accountError} signOutUrl={signOutUrl} onSubmit={registerStudent} onOpenAdmin={() => { setPortal("admin"); setAccountError(""); }} />;
-  }
-
-  if (!account.examEnabled) {
+  if (!system.examEnabled) {
     return (
       <main className="grid min-h-screen place-items-center px-4">
         <section className="w-full max-w-lg rounded-3xl border border-[#c7dada] bg-white p-8 text-center shadow-[0_20px_60px_rgb(18_60_69/12%)]">
           <div className="mx-auto grid size-12 place-items-center rounded-2xl bg-[#fff1d6] text-[#9a5b14]"><Power className="size-6" /></div>
           <h1 className="mt-5 text-2xl font-bold text-[#163c45]">ระบบสอบยังไม่เปิด</h1>
           <p className="mt-3 text-base leading-7 text-[#5d7479]">ผู้ดูแลระบบยังไม่อนุญาตให้เข้าสู่ข้อสอบ ข้อสอบจะไม่ถูกแสดงจนกว่าจะเปิดระบบ</p>
-          <div className="mt-6 flex flex-col justify-center gap-3 sm:flex-row"><Button type="button" onClick={() => void refreshAccount()}><RefreshCw /> ตรวจสอบอีกครั้ง</Button><a href={signOutUrl} target="_top" className="inline-flex h-10 items-center justify-center rounded-lg border border-[#b8cccc] px-4 text-sm font-semibold text-[#30545c] hover:bg-[#f1f7f7]"><LogOut className="mr-2 size-4" />ออกจากระบบ</a></div>
+          <div className="mt-6 flex flex-col justify-center gap-3 sm:flex-row"><Button type="button" onClick={() => void refreshSystem()}><RefreshCw /> ตรวจสอบอีกครั้ง</Button><Button type="button" variant="outline" onClick={() => { setPortal("admin"); void refreshAdmin(); }}><Settings2 /> ผู้ดูแลระบบ</Button></div>
         </section>
       </main>
     );
@@ -380,7 +358,7 @@ export function ExamApp({ viewerName, signOutUrl }: { viewerName: string; signOu
             </div>
           </div>
           <div className="p-6 sm:p-10">
-            <div className="mb-7 flex items-start justify-between gap-4"><div><p className="text-sm font-semibold text-[#0e5965]">ลงชื่อเข้าสอบแล้ว</p><p className="mt-1 text-base text-[#526b73]">เลือกวิชาและยืนยันข้อมูลก่อนเริ่มทำข้อสอบ</p></div><a href={signOutUrl} target="_top" className="shrink-0 text-sm font-semibold text-[#0e5965] hover:underline">ออกจากระบบ</a></div>
+            <div className="mb-7 flex items-start justify-between gap-4"><div><p className="text-sm font-semibold text-[#0e5965]">ลงชื่อเข้าสอบ</p><p className="mt-1 text-base text-[#526b73]">กรอกข้อมูลให้ครบก่อนเริ่มทำข้อสอบ</p></div><button type="button" onClick={() => { setPortal("admin"); void refreshAdmin(); }} className="shrink-0 text-sm font-semibold text-[#0e5965] hover:underline">ผู้ดูแลระบบ</button></div>
             <form className="space-y-5" onSubmit={beginExam}>
               <div className="space-y-3">
                 <Label>เลือกวิชาสอบ</Label>
@@ -397,7 +375,9 @@ export function ExamApp({ viewerName, signOutUrl }: { viewerName: string; signOu
                   })}
                 </RadioGroup>
               </div>
-              <div className="grid gap-3 rounded-xl border border-[#d7e5e4] bg-[#f7fbfa] p-4 text-sm text-[#365860]"><p><span className="font-semibold text-[#173f47]">ชื่อ:</span> {form.name}</p><p><span className="font-semibold text-[#173f47]">ชั้น / ห้อง:</span> {form.classLevel}</p><p><span className="font-semibold text-[#173f47]">รหัสนักศึกษา:</span> {form.studentId}</p></div>
+              <div className="space-y-2"><Label htmlFor="name">ชื่อ - นามสกุล</Label><Input id="name" required value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} placeholder="เช่น สมชาย ใจดี" className="h-11 bg-white text-base" /></div>
+              <div className="space-y-2"><Label htmlFor="classLevel">ชั้น / ห้อง</Label><Input id="classLevel" required value={form.classLevel} onChange={(event) => setForm({ ...form, classLevel: event.target.value })} placeholder="เช่น ปวช. 2/1" className="h-11 bg-white text-base" /></div>
+              <div className="space-y-2"><Label htmlFor="studentId">รหัสนักศึกษา</Label><Input id="studentId" required value={form.studentId} onChange={(event) => setForm({ ...form, studentId: event.target.value })} placeholder="กรอกรหัสนักศึกษา" className="h-11 bg-white text-base" /></div>
               <div className="rounded-xl bg-[#edf5f4] px-4 py-3 text-sm leading-6 text-[#365860]">เมื่อกดเริ่มทำข้อสอบ ระบบจะขอเปิดเต็มหน้าจอ และตรวจจับการออกจากหน้าสอบ</div>
               <Button type="submit" size="lg" disabled={isExamLoading} className="h-12 w-full bg-[#0e5965] text-base hover:bg-[#094852] disabled:bg-[#5f7c82]">{isExamLoading ? <LoaderCircle className="size-5 animate-spin" /> : <UserRoundCheck className="size-5" />}{isExamLoading ? "กำลังเตรียมข้อสอบ" : "เริ่มทำข้อสอบ"}</Button>
             </form>
@@ -410,7 +390,7 @@ export function ExamApp({ viewerName, signOutUrl }: { viewerName: string; signOu
   if (!currentQuestion) return null;
   const selected = answers[String(currentQuestion.id)];
   return (
-    <main className="exam-protected min-h-screen bg-[#f1f6f6]" onContextMenu={(event) => event.preventDefault()} onSelectStart={(event) => event.preventDefault()} onDragStart={(event) => event.preventDefault()}>
+    <main className="exam-protected min-h-screen bg-[#f1f6f6]" onContextMenu={(event) => event.preventDefault()} onDragStart={(event) => event.preventDefault()}>
       <header className="sticky top-0 z-20 border-b border-[#bed4d4] bg-[#0e5965] text-white shadow-sm">
         <div className="mx-auto flex max-w-7xl items-center justify-between gap-4 px-4 py-3 sm:px-6">
           <div className="min-w-0"><p className="truncate text-sm font-semibold text-[#ccece4]">{exam.title}</p><p className="text-xs text-[#95d5c8]">ข้อ {currentIndex + 1} จาก {exam.questions.length}</p></div>
@@ -453,71 +433,36 @@ export function ExamApp({ viewerName, signOutUrl }: { viewerName: string; signOu
   );
 }
 
-function RegistrationPanel({ viewerName, registration, setRegistration, busy, error, signOutUrl, onSubmit, onOpenAdmin }: {
-  viewerName: string;
-  registration: { name: string; classLevel: string; studentId: string };
-  setRegistration: (value: { name: string; classLevel: string; studentId: string }) => void;
-  busy: boolean;
-  error: string;
-  signOutUrl: string;
-  onSubmit: (event: FormEvent<HTMLFormElement>) => void;
-  onOpenAdmin: () => void;
-}) {
-  return (
-    <main className="min-h-screen px-4 py-6 sm:px-6 sm:py-12">
-      <section className="mx-auto grid max-w-5xl overflow-hidden rounded-3xl border border-[#c5dcda] bg-white shadow-[0_24px_70px_rgb(18_60_69/12%)] lg:grid-cols-[1.02fr_0.98fr]">
-        <div className="bg-[#0e5965] px-6 py-10 text-white sm:px-10 sm:py-14">
-          <Badge className="border-[#75cbb8] bg-[#135f6b] px-3 py-1 text-sm text-[#e4faf4]" variant="outline"><ShieldCheck className="size-4" /> ระบบสอบปลอดภัย</Badge>
-          <h1 className="mt-6 text-3xl font-bold leading-tight tracking-tight sm:text-4xl">สมัครเข้าสู่ระบบสอบ</h1>
-          <p className="mt-4 max-w-md text-base leading-7 text-[#dff0ec]">ลงชื่อเข้าใช้ด้วย ChatGPT เรียบร้อยแล้ว กรุณากรอกข้อมูลนักศึกษาเพียงครั้งแรก เพื่อใช้ยืนยันตัวตนและบันทึกผลสอบ</p>
-          <div className="mt-10 border-t border-[#45909a] pt-7 text-sm leading-6 text-[#dff0ec]"><p>บัญชีที่ลงชื่อเข้าใช้: {viewerName}</p><p className="mt-3">ข้อมูลนี้จะถูกใช้ส่งคะแนนไปยังตารางผลสอบ</p></div>
-        </div>
-        <div className="p-6 sm:p-10">
-          <div className="mb-7 flex items-start justify-between gap-4"><div><p className="text-sm font-semibold text-[#0e5965]">ข้อมูลผู้เข้าสอบ</p><p className="mt-1 text-base text-[#526b73]">ตรวจสอบก่อนกดบันทึก</p></div><a href={signOutUrl} target="_top" className="shrink-0 text-sm font-semibold text-[#0e5965] hover:underline">ออกจากระบบ</a></div>
-          <form className="space-y-5" onSubmit={onSubmit}>
-            <div className="space-y-2"><Label htmlFor="register-name">ชื่อ - นามสกุล</Label><Input id="register-name" required value={registration.name} onChange={(event) => setRegistration({ ...registration, name: event.target.value })} placeholder="เช่น สมชาย ใจดี" className="h-11 bg-white text-base" /></div>
-            <div className="space-y-2"><Label htmlFor="register-class">ชั้น / ห้อง</Label><Input id="register-class" required value={registration.classLevel} onChange={(event) => setRegistration({ ...registration, classLevel: event.target.value })} placeholder="เช่น ปวช. 2/1" className="h-11 bg-white text-base" /></div>
-            <div className="space-y-2"><Label htmlFor="register-id">รหัสนักศึกษา</Label><Input id="register-id" required value={registration.studentId} onChange={(event) => setRegistration({ ...registration, studentId: event.target.value })} placeholder="กรอกรหัสนักศึกษา" className="h-11 bg-white text-base" /></div>
-            {error ? <p className="rounded-xl border border-[#e9c48e] bg-[#fff6e5] px-4 py-3 text-sm font-medium text-[#8b511b]">{error}</p> : null}
-            <Button type="submit" size="lg" disabled={busy} className="h-12 w-full bg-[#0e5965] text-base hover:bg-[#094852]">{busy ? <LoaderCircle className="animate-spin" /> : <UserPlus />} {busy ? "กำลังบันทึก" : "สมัครเข้าสู่ระบบสอบ"}</Button>
-          </form>
-          <button type="button" onClick={onOpenAdmin} className="mt-6 text-sm font-semibold text-[#567279] hover:text-[#0e5965] hover:underline">สำหรับผู้ดูแลระบบ</button>
-        </div>
-      </section>
-    </main>
-  );
-}
-
-function AdminPortal({ account, signOutUrl, setupToken, setSetupToken, busy, error, onBack, onSetup, onSetEnabled }: {
-  account: Account;
-  signOutUrl: string;
-  setupToken: string;
-  setSetupToken: (value: string) => void;
+function AdminPortal({ admin, password, setPassword, busy, error, onBack, onLogin, onLogout, onSetEnabled }: {
+  admin: AdminStatus | null;
+  password: string;
+  setPassword: (value: string) => void;
   busy: boolean;
   error: string;
   onBack: () => void;
-  onSetup: () => void;
+  onLogin: () => void;
+  onLogout: () => void;
   onSetEnabled: (enabled: boolean) => void;
 }) {
-  if (!account.isAdmin) {
+  if (!admin?.authenticated) {
     return (
       <main className="grid min-h-screen place-items-center px-4">
         <section className="w-full max-w-lg rounded-3xl border border-[#c7dada] bg-white p-8 shadow-[0_20px_60px_rgb(18_60_69/12%)]">
-          <div className="flex items-start justify-between gap-4"><div><div className="grid size-12 place-items-center rounded-2xl bg-[#e6f2ef] text-[#0e5965]"><Settings2 className="size-6" /></div><h1 className="mt-5 text-2xl font-bold text-[#163c45]">ตั้งค่าผู้ดูแลระบบครั้งแรก</h1></div><a href={signOutUrl} target="_top" className="text-sm font-semibold text-[#0e5965] hover:underline">ออกจากระบบ</a></div>
-          <p className="mt-3 leading-7 text-[#5d7479]">กรอกรหัสตั้งค่าที่ครูได้รับเพื่อผูกบัญชี ChatGPT ปัจจุบันเป็นผู้ดูแลระบบ รหัสนี้ใช้ตั้งค่าได้เพียงครั้งเดียว</p>
-          <form className="mt-6 space-y-4" onSubmit={(event) => { event.preventDefault(); onSetup(); }}><div className="space-y-2"><Label htmlFor="admin-token">รหัสตั้งค่าผู้ดูแล</Label><Input id="admin-token" required value={setupToken} onChange={(event) => setSetupToken(event.target.value)} placeholder="กรอกรหัสที่ได้รับ" /></div>{error ? <p className="rounded-xl border border-[#e9c48e] bg-[#fff6e5] px-4 py-3 text-sm font-medium text-[#8b511b]">{error}</p> : null}<Button type="submit" disabled={busy} className="w-full bg-[#0e5965]">{busy ? <LoaderCircle className="animate-spin" /> : <Settings2 />} ตั้งเป็นผู้ดูแลระบบ</Button></form>
-          <button type="button" onClick={onBack} className="mt-5 text-sm font-semibold text-[#567279] hover:text-[#0e5965] hover:underline">กลับไปหน้าลงทะเบียน</button>
+          <div><div className="grid size-12 place-items-center rounded-2xl bg-[#e6f2ef] text-[#0e5965]"><Settings2 className="size-6" /></div><h1 className="mt-5 text-2xl font-bold text-[#163c45]">เข้าสู่ระบบแอดมิน</h1></div>
+          <p className="mt-3 leading-7 text-[#5d7479]">กรอกรหัสผ่านแอดมินเพื่อเปิดหรือปิดระบบสอบ รหัสผ่านจะไม่แสดงให้ผู้เรียนเห็น</p>
+          <form className="mt-6 space-y-4" onSubmit={(event) => { event.preventDefault(); onLogin(); }}><div className="space-y-2"><Label htmlFor="admin-password">รหัสผ่านแอดมิน</Label><Input id="admin-password" type="password" required value={password} onChange={(event) => setPassword(event.target.value)} placeholder="กรอกรหัสผ่าน" /></div>{error ? <p className="rounded-xl border border-[#e9c48e] bg-[#fff6e5] px-4 py-3 text-sm font-medium text-[#8b511b]">{error}</p> : null}<Button type="submit" disabled={busy} className="w-full bg-[#0e5965]">{busy ? <LoaderCircle className="animate-spin" /> : <Settings2 />} เข้าสู่ระบบแอดมิน</Button></form>
+          <button type="button" onClick={onBack} className="mt-5 text-sm font-semibold text-[#567279] hover:text-[#0e5965] hover:underline">กลับไปหน้าข้อสอบ</button>
         </section>
       </main>
     );
   }
 
-  const status = account.examEnabled;
+  const status = admin.examEnabled;
   return (
     <main className="grid min-h-screen place-items-center px-4 py-8">
       <section className="w-full max-w-2xl overflow-hidden rounded-3xl border border-[#c5dcda] bg-white shadow-[0_24px_70px_rgb(18_60_69/12%)]">
-        <div className="bg-[#0e5965] px-7 py-8 text-white sm:px-10"><div className="flex items-center justify-between gap-4"><div><p className="flex items-center gap-2 text-sm font-semibold text-[#dff0ec]"><Settings2 className="size-4" /> แผงควบคุมผู้ดูแล</p><h1 className="mt-3 text-3xl font-bold">ระบบสอบแผนกช่างยนต์</h1></div><a href={signOutUrl} target="_top" className="inline-flex items-center gap-2 text-sm font-semibold text-[#dff0ec] hover:text-white"><LogOut className="size-4" /> ออกจากระบบ</a></div></div>
-        <div className="p-7 sm:p-10"><div className={`rounded-2xl border p-6 ${status ? "border-[#9acfc3] bg-[#e9f6f1]" : "border-[#e9c48e] bg-[#fff6e5]"}`}><div className="flex flex-col justify-between gap-5 sm:flex-row sm:items-center"><div><p className="text-sm font-semibold text-[#526b73]">สถานะระบบสอบ</p><p className={`mt-1 text-2xl font-bold ${status ? "text-[#17604f]" : "text-[#8b511b]"}`}>{status ? "เปิดรับนักเรียนเข้าสอบ" : "ปิดระบบสอบ"}</p><p className="mt-2 max-w-md text-sm leading-6 text-[#526b73]">{status ? "นักเรียนที่ลงทะเบียนแล้วจึงจะโหลดข้อสอบได้" : "นักเรียนจะไม่สามารถเปิดดูข้อสอบหรือเริ่มสอบได้"}</p></div><Button type="button" disabled={busy} onClick={() => onSetEnabled(!status)} className={status ? "bg-[#9b3d32] hover:bg-[#7f3027]" : "bg-[#0e5965] hover:bg-[#094852]"}>{busy ? <LoaderCircle className="animate-spin" /> : <Power />}{status ? "ปิดระบบสอบ" : "เปิดระบบสอบ"}</Button></div></div>{error ? <p className="mt-5 rounded-xl border border-[#e9c48e] bg-[#fff6e5] px-4 py-3 text-sm font-medium text-[#8b511b]">{error}</p> : null}<div className="mt-7 rounded-xl bg-[#edf5f4] p-4 text-sm leading-6 text-[#365860]">การปิดระบบจะหยุดการเข้าถึงข้อสอบสำหรับผู้เรียนรายใหม่ทันที แต่ผู้ที่กำลังทำข้อสอบอยู่ยังส่งคำตอบได้ตามปกติ</div></div>
+        <div className="bg-[#0e5965] px-7 py-8 text-white sm:px-10"><div className="flex items-center justify-between gap-4"><div><p className="flex items-center gap-2 text-sm font-semibold text-[#dff0ec]"><Settings2 className="size-4" /> แผงควบคุมผู้ดูแล</p><h1 className="mt-3 text-3xl font-bold">ระบบสอบแผนกช่างยนต์</h1></div><Button type="button" variant="secondary" onClick={onLogout}>ออกจากระบบ</Button></div></div>
+        <div className="p-7 sm:p-10"><div className={`rounded-2xl border p-6 ${status ? "border-[#9acfc3] bg-[#e9f6f1]" : "border-[#e9c48e] bg-[#fff6e5]"}`}><div className="flex flex-col justify-between gap-5 sm:flex-row sm:items-center"><div><p className="text-sm font-semibold text-[#526b73]">สถานะระบบสอบ</p><p className={`mt-1 text-2xl font-bold ${status ? "text-[#17604f]" : "text-[#8b511b]"}`}>{status ? "เปิดรับนักเรียนเข้าสอบ" : "ปิดระบบสอบ"}</p><p className="mt-2 max-w-md text-sm leading-6 text-[#526b73]">{status ? "นักเรียนจึงจะโหลดข้อสอบได้" : "นักเรียนจะไม่สามารถเปิดดูข้อสอบหรือเริ่มสอบได้"}</p></div><Button type="button" disabled={busy} onClick={() => onSetEnabled(!status)} className={status ? "bg-[#9b3d32] hover:bg-[#7f3027]" : "bg-[#0e5965] hover:bg-[#094852]"}>{busy ? <LoaderCircle className="animate-spin" /> : <Power />}{status ? "ปิดระบบสอบ" : "เปิดระบบสอบ"}</Button></div></div>{error ? <p className="mt-5 rounded-xl border border-[#e9c48e] bg-[#fff6e5] px-4 py-3 text-sm font-medium text-[#8b511b]">{error}</p> : null}<div className="mt-7 rounded-xl bg-[#edf5f4] p-4 text-sm leading-6 text-[#365860]">การปิดระบบจะหยุดการเข้าถึงข้อสอบสำหรับผู้เรียนรายใหม่ทันที แต่ผู้ที่กำลังทำข้อสอบอยู่ยังส่งคำตอบได้ตามปกติ</div></div>
       </section>
     </main>
   );
