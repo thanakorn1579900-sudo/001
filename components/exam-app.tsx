@@ -542,11 +542,13 @@ function AdminPortal({ admin, password, setPassword, busy, error, uploadedExams,
   const [viewing, setViewing] = useState<EditableExam | null>(null);
   const [editorBusy, setEditorBusy] = useState(false);
   const [editorError, setEditorError] = useState("");
+  const [editorNotice, setEditorNotice] = useState("");
   const [deleteTarget, setDeleteTarget] = useState<UploadedExam | null>(null);
 
   const loadExam = async (id: string, mode: "view" | "edit") => {
     setEditorBusy(true);
     setEditorError("");
+    setEditorNotice("");
     try {
       const response = await fetch(`/api/admin/exams/${encodeURIComponent(id)}`, { cache: "no-store" });
       const data = await response.json() as { exam?: EditableExam; error?: string };
@@ -554,6 +556,23 @@ function AdminPortal({ admin, password, setPassword, busy, error, uploadedExams,
       if (mode === "view") setViewing(data.exam); else setEditing(data.exam);
     } catch (loadError) {
       setEditorError(loadError instanceof Error ? loadError.message : "ไม่สามารถเปิดข้อสอบได้");
+    } finally {
+      setEditorBusy(false);
+    }
+  };
+
+  const reprocessExam = async (exam: UploadedExam) => {
+    setEditorBusy(true);
+    setEditorError("");
+    setEditorNotice("");
+    try {
+      const response = await fetch(`/api/admin/exams/${encodeURIComponent(exam.id)}`, { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ action: "reprocess" }) });
+      const data = await response.json() as { error?: string; message?: string };
+      if (!response.ok) throw new Error(data.error || "ไม่สามารถอ่านไฟล์ต้นฉบับใหม่ได้");
+      setEditorNotice(data.message || "อ่านไฟล์ต้นฉบับใหม่แล้ว");
+      onDataChanged();
+    } catch (reprocessError) {
+      setEditorError(reprocessError instanceof Error ? reprocessError.message : "ไม่สามารถอ่านไฟล์ต้นฉบับใหม่ได้");
     } finally {
       setEditorBusy(false);
     }
@@ -673,9 +692,9 @@ function AdminPortal({ admin, password, setPassword, busy, error, uploadedExams,
             </form>
           </section>
 
-          <section className="rounded-2xl border border-[#d8e5e5] bg-white p-6"><div className="flex items-center justify-between gap-4"><div><h2 className="text-lg font-bold text-[#173f47]">ข้อสอบที่อัปโหลด</h2><p className="mt-1 text-sm text-[#526b73]">ตรวจสอบข้อสอบทีละข้อ แก้ไข หรือลบก่อนเปิดให้นักเรียนสอบ</p></div><Badge variant="outline" className="border-[#9acfc3] bg-[#e9f6f1] text-[#17604f]">{uploadedExams.length} ชุด</Badge></div>{uploadedExams.length ? <div className="mt-4 divide-y divide-[#e0ecec]">{uploadedExams.map((exam) => <div key={exam.id} className="flex flex-col gap-3 py-4 first:pt-0 last:pb-0 sm:flex-row sm:items-start sm:justify-between"><div><p className="font-semibold text-[#173f47]">{exam.title}</p><p className="mt-1 text-sm leading-5 text-[#526b73]">{exam.description}</p><p className="mt-1 text-xs text-[#6e8589]">ไฟล์ {exam.sourceFileName}</p></div><div className="flex flex-wrap items-center gap-2"><Badge className="shrink-0 bg-[#e6f2ef] text-[#0e5965] hover:bg-[#e6f2ef]">{exam.questionCount} ข้อ</Badge><Button type="button" variant="outline" size="sm" disabled={editorBusy} onClick={() => void loadExam(exam.id, "view")}><Eye /> ดูข้อสอบ</Button><Button type="button" variant="outline" size="sm" disabled={editorBusy} onClick={() => void loadExam(exam.id, "edit")}><Pencil /> แก้ไข</Button><Button type="button" variant="outline" size="sm" disabled={editorBusy} onClick={() => { setEditorError(""); setDeleteTarget(exam); }} className="border-[#e2aaa3] text-[#9b3d32] hover:bg-[#fff1ef] hover:text-[#7f3027]"><Trash2 /> ลบ</Button></div></div>)}</div> : <p className="mt-4 rounded-xl bg-[#f3f7f7] px-4 py-3 text-sm text-[#5d7479]">ยังไม่มีข้อสอบที่อัปโหลด</p>}</section>
+          <section className="rounded-2xl border border-[#d8e5e5] bg-white p-6"><div className="flex items-center justify-between gap-4"><div><h2 className="text-lg font-bold text-[#173f47]">ข้อสอบที่อัปโหลด</h2><p className="mt-1 text-sm text-[#526b73]">ตรวจสอบข้อสอบทีละข้อ แก้ไข หรือลบก่อนเปิดให้นักเรียนสอบ</p></div><Badge variant="outline" className="border-[#9acfc3] bg-[#e9f6f1] text-[#17604f]">{uploadedExams.length} ชุด</Badge></div>{uploadedExams.length ? <div className="mt-4 divide-y divide-[#e0ecec]">{uploadedExams.map((exam) => <div key={exam.id} className="flex flex-col gap-3 py-4 first:pt-0 last:pb-0 sm:flex-row sm:items-start sm:justify-between"><div><p className="font-semibold text-[#173f47]">{exam.title}</p><p className="mt-1 text-sm leading-5 text-[#526b73]">{exam.description}</p><p className="mt-1 text-xs text-[#6e8589]">ไฟล์ {exam.sourceFileName}</p></div><div className="flex flex-wrap items-center gap-2"><Badge className="shrink-0 bg-[#e6f2ef] text-[#0e5965] hover:bg-[#e6f2ef]">{exam.questionCount} ข้อ</Badge><Button type="button" variant="outline" size="sm" disabled={editorBusy} onClick={() => void reprocessExam(exam)}><RefreshCw /> อ่านไฟล์ใหม่</Button><Button type="button" variant="outline" size="sm" disabled={editorBusy} onClick={() => void loadExam(exam.id, "view")}><Eye /> ดูข้อสอบ</Button><Button type="button" variant="outline" size="sm" disabled={editorBusy} onClick={() => void loadExam(exam.id, "edit")}><Pencil /> แก้ไข</Button><Button type="button" variant="outline" size="sm" disabled={editorBusy} onClick={() => { setEditorError(""); setEditorNotice(""); setDeleteTarget(exam); }} className="border-[#e2aaa3] text-[#9b3d32] hover:bg-[#fff1ef] hover:text-[#7f3027]"><Trash2 /> ลบ</Button></div></div>)}</div> : <p className="mt-4 rounded-xl bg-[#f3f7f7] px-4 py-3 text-sm text-[#5d7479]">ยังไม่มีข้อสอบที่อัปโหลด</p>}</section>
 
-          {editorError ? <p className="rounded-xl border border-[#e9c48e] bg-[#fff6e5] px-4 py-3 text-sm font-medium text-[#8b511b]">{editorError}</p> : null}
+          {editorError ? <p className="rounded-xl border border-[#e9c48e] bg-[#fff6e5] px-4 py-3 text-sm font-medium text-[#8b511b]">{editorError}</p> : null}{editorNotice ? <p className="rounded-xl border border-[#9acfc3] bg-[#e9f6f1] px-4 py-3 text-sm font-medium text-[#17604f]">{editorNotice}</p> : null}
           <div className="rounded-xl bg-[#edf5f4] p-4 text-sm leading-6 text-[#365860]">การปิดระบบจะหยุดการเข้าถึงข้อสอบสำหรับผู้เรียนรายใหม่ทันที แต่ผู้ที่กำลังทำข้อสอบอยู่ยังส่งคำตอบได้ตามปกติ</div>
         </div>
       </section>

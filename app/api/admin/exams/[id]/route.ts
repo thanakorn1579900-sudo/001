@@ -1,4 +1,5 @@
 import { hasAdminSession } from "@/lib/admin-session";
+import { parseExamUpload } from "@/lib/exam-upload-parser";
 import { deleteUploadedExam, getUploadedExamForAdmin, normalizeUploadedQuestions, updateUploadedExam, uploadsBucket } from "@/lib/uploaded-exams";
 
 export const runtime = "edge";
@@ -30,7 +31,21 @@ export async function PATCH(request: Request, context: Context) {
   try {
     const result = await adminExam(request, context);
     if (result.error) return result.error;
-    const body = await request.json() as { title?: unknown; description?: unknown; questions?: unknown };
+    const body = await request.json() as { action?: unknown; title?: unknown; description?: unknown; questions?: unknown };
+    if (body.action === "reprocess") {
+      const source = await uploadsBucket().get(result.exam.sourceObjectKey);
+      if (!source) return Response.json({ error: "ไม่พบไฟล์ต้นฉบับสำหรับประมวลผลใหม่" }, { status: 404 });
+      const parsed = await parseExamUpload(result.exam.sourceFileName, await source.arrayBuffer());
+      if (!parsed.questions.length) return Response.json({ error: "ตรวจพบโจทย์ แต่ยังไม่พบข้อที่มีตัวเลือกและเฉลยครบ กรุณาแก้ไขในหน้าแอดมิน" }, { status: 400 });
+      await updateUploadedExam({ id: result.exam.id, title: result.exam.title, description: result.exam.description, questions: parsed.questions });
+      const missed = parsed.diagnostics.incomplete.length
+        ? ` ยังมีข้อที่ต้องตรวจ ${parsed.diagnostics.incomplete.slice(0, 8).join(", ")}${parsed.diagnostics.incomplete.length > 8 ? "…" : ""}`
+        : "";
+      return Response.json({
+        exam: { id: result.exam.id, title: result.exam.title, description: result.exam.description, questionCount: parsed.questions.length },
+        message: `อ่านไฟล์ต้นฉบับใหม่แล้ว พบข้อสอบ ${parsed.questions.length} ข้อ${missed}`,
+      });
+    }
     const title = cleanText(body.title, 160) || result.exam.title;
     const description = cleanText(body.description, 320) || result.exam.description;
     const questions = normalizeUploadedQuestions(body.questions);

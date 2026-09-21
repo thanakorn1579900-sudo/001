@@ -180,7 +180,8 @@ function lineQuestion(line: string) {
 function answerMapFrom(source: string) {
   const answers = new Map<number, string>();
   const compact = withoutMarkers(source).replace(/\r/g, "\n");
-  const keyed = new RegExp(`(?:ข้อ(?:ที่)?\\s*)?([${numberCharacters}]{1,3})\\s*(?:[.)、:：\\-=]|\\s)*\\s*(?:เฉลย|คำตอบ|answer|ans\\.?|correct)?\\s*[:：\\-]?\\s*\\(?\\s*([${acceptedLabels}])\\s*\\)?(?:\\s*[.)、:：\\-])?(?=$|[\\s,;|])`, "gi");
+  const answerWords = "(?:เฉลย(?:ที่ถูก)?|คำตอบ(?:ที่ถูก)?|answer(?:\\s*key)?|ans\\.?|correct(?:\\s*answer)?|ตอบ|คือ|ได้แก่|เป็น)";
+  const keyed = new RegExp(`(?:เฉลย\\s*)?(?:ข้อ(?:ที่)?\\s*)?([${numberCharacters}]{1,3})\\s*(?:[.)、:：\\-=]|\\s)*(?:${answerWords}\\s*[:：\\-]?\\s*)*\\(?\\s*([${acceptedLabels}])\\s*\\)?(?:\\s*[.)、:：\\-])?(?=$|[\\s,;|])`, "gi");
   for (const match of compact.matchAll(keyed)) {
     const number = questionNumber(match[1]);
     if (number) answers.set(number, optionLabel(match[2], 0));
@@ -247,7 +248,7 @@ function parseText(source: string, fileName: string, sourceFormat: "TXT" | "DOCX
   return { questions, suggestedTitle: safeTitle(fileName), diagnostics: diagnostics(sourceFormat, candidates, questions, incomplete, answers.size) };
 }
 
-function findDocxEntry(bytes: Uint8Array) {
+function findDocxEntry(bytes: Uint8Array, targetName = "word/document.xml", required = true) {
   const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
   for (let index = bytes.length - 22; index >= Math.max(0, bytes.length - 65_557); index -= 1) {
     if (view.getUint32(index, true) !== 0x06054b50) continue;
@@ -262,7 +263,7 @@ function findDocxEntry(bytes: Uint8Array) {
       const commentLength = view.getUint16(cursor + 32, true);
       const localOffset = view.getUint32(cursor + 42, true);
       const name = decode.decode(bytes.slice(cursor + 46, cursor + 46 + nameLength));
-      if (name === "word/document.xml") {
+      if (name === targetName) {
         if (view.getUint32(localOffset, true) !== 0x04034b50) throw new Error("ไฟล์ DOCX ไม่สมบูรณ์");
         const localNameLength = view.getUint16(localOffset + 26, true);
         const localExtraLength = view.getUint16(localOffset + 28, true);
@@ -272,7 +273,22 @@ function findDocxEntry(bytes: Uint8Array) {
       cursor += 46 + nameLength + extraLength + commentLength;
     }
   }
-  throw new Error("ไม่พบเนื้อหาในไฟล์ DOCX");
+  if (required) throw new Error("ไม่พบเนื้อหาในไฟล์ DOCX");
+  return null;
+}
+
+async function readDocxXml(bytes: Uint8Array, targetName: string, required = true) {
+  const entry = findDocxEntry(bytes, targetName, required);
+  if (!entry) return "";
+  let xmlBytes = entry.data;
+  if (entry.compression === 8) {
+    if (typeof DecompressionStream === "undefined") throw new Error("ระบบยังไม่รองรับการอ่านไฟล์ DOCX ขณะนี้");
+    const stream = new Blob([xmlBytes]).stream().pipeThrough(new DecompressionStream("deflate-raw"));
+    xmlBytes = new Uint8Array(await new Response(stream).arrayBuffer());
+  } else if (entry.compression !== 0) {
+    throw new Error("รูปแบบการบีบอัดในไฟล์ DOCX ไม่รองรับ");
+  }
+  return decode.decode(xmlBytes);
 }
 
 function isRed(value: string) {
@@ -285,26 +301,58 @@ function isRed(value: string) {
   return red >= 150 && red >= green * 1.6 && red >= blue * 1.6 && green <= 120 && blue <= 120;
 }
 
-function isAnswerMarkedDocxRun(run: string) {
-  const color = run.match(/<w:color\b[^>]*?\bw:val\s*=\s*["']([^"']+)["'][^>]*>/i)?.[1];
+function hasAnswerPresentation(markup: string) {
+  const color = markup.match(/<w:color\b[^>]*?\bw:val\s*=\s*["']([^"']+)["'][^>]*>/i)?.[1];
   if (color && isRed(color)) return true;
-  if (/<w:highlight\b[^>]*?\bw:val\s*=\s*["'](?:red|darkRed)["'][^>]*>/i.test(run)) return true;
+  if (/<w:highlight\b[^>]*?\bw:val\s*=\s*["'](?:red|darkRed)["'][^>]*>/i.test(markup)) return true;
   // Word's "All caps" and "Small caps" formatting are explicit author intent;
   // use them as an answer marker without guessing from ordinary capital letters.
-  return /<w:(?:caps|smallCaps)\b[^>]*?(?:\/>|\bw:val\s*=\s*["'](?:1|true|on)["'][^>]*>)/i.test(run);
+  return /<w:(?:caps|smallCaps)\b[^>]*?(?:\/>|\bw:val\s*=\s*["'](?:1|true|on)["'][^>]*>)/i.test(markup);
 }
 
-function docxTextWithAnswerMarkers(xml: string) {
-  const withRuns = xml.replace(/<w:r\b[\s\S]*?<\/w:r>/g, (run) => {
+function markedStyleIds(stylesXml: string) {
+  const definitions = new Map<string, string>();
+  for (const match of stylesXml.matchAll(/<w:style\b[^>]*?\bw:styleId\s*=\s*["']([^"']+)["'][^>]*>[\s\S]*?<\/w:style>/gi)) definitions.set(match[1], match[0]);
+  const result = new Set<string>();
+  const resolving = new Set<string>();
+  const resolvesToAnswerStyle = (styleId: string): boolean => {
+    if (result.has(styleId)) return true;
+    if (resolving.has(styleId)) return false;
+    const definition = definitions.get(styleId);
+    if (!definition) return false;
+    resolving.add(styleId);
+    const basedOn = definition.match(/<w:basedOn\b[^>]*?\bw:val\s*=\s*["']([^"']+)["'][^>]*\/>/i)?.[1];
+    const marked = hasAnswerPresentation(definition) || Boolean(basedOn && resolvesToAnswerStyle(basedOn));
+    resolving.delete(styleId);
+    if (marked) result.add(styleId);
+    return marked;
+  };
+  for (const styleId of definitions.keys()) resolvesToAnswerStyle(styleId);
+  return result;
+}
+
+function isAnswerMarkedDocxRun(run: string, styleIds: Set<string>) {
+  if (hasAnswerPresentation(run)) return true;
+  const styleId = run.match(/<w:rStyle\b[^>]*?\bw:val\s*=\s*["']([^"']+)["'][^>]*\/>/i)?.[1];
+  return Boolean(styleId && styleIds.has(styleId));
+}
+
+function docxTextWithAnswerMarkers(xml: string, styleIds: Set<string>) {
+  const withParagraphs = xml.replace(/<w:p\b[\s\S]*?<\/w:p>/g, (paragraph) => {
+    const paragraphStyle = paragraph.match(/<w:pStyle\b[^>]*?\bw:val\s*=\s*["']([^"']+)["'][^>]*\/>/i)?.[1];
+    const inheritedMark = Boolean(paragraphStyle && styleIds.has(paragraphStyle));
+    const withRuns = paragraph.replace(/<w:r\b[\s\S]*?<\/w:r>/g, (run) => {
     const runText = run
       .replace(/<w:tab\b[^>]*\/>/g, " ")
       .replace(/<w:(?:br|cr)\b[^>]*\/>/g, "\n")
       .replace(/<w:t\b[^>]*>/g, "")
       .replace(/<\/w:t>/g, "")
       .replace(/<[^>]+>/g, "");
-    return runText && isAnswerMarkedDocxRun(run) ? `${markedStart}${runText}${markedEnd}` : runText;
+      return runText && (inheritedMark || isAnswerMarkedDocxRun(run, styleIds)) ? `${markedStart}${runText}${markedEnd}` : runText;
+    });
+    return `${withRuns.replace(/<[^>]+>/g, "")}\n`;
   });
-  return withRuns
+  return withParagraphs
     .replace(/<w:tab\b[^>]*\/>/g, " ")
     .replace(/<w:(?:br|cr)\b[^>]*\/>/g, "\n")
     .replace(/<\/w:tc>/g, " ")
@@ -314,16 +362,11 @@ function docxTextWithAnswerMarkers(xml: string) {
 }
 
 async function parseDocx(bytes: Uint8Array, fileName: string): Promise<ParsedUpload> {
-  const entry = findDocxEntry(bytes);
-  let xmlBytes = entry.data;
-  if (entry.compression === 8) {
-    if (typeof DecompressionStream === "undefined") throw new Error("ระบบยังไม่รองรับการอ่านไฟล์ DOCX ขณะนี้");
-    const stream = new Blob([xmlBytes]).stream().pipeThrough(new DecompressionStream("deflate-raw"));
-    xmlBytes = new Uint8Array(await new Response(stream).arrayBuffer());
-  } else if (entry.compression !== 0) {
-    throw new Error("รูปแบบการบีบอัดในไฟล์ DOCX ไม่รองรับ");
-  }
-  const xml = docxTextWithAnswerMarkers(decode.decode(xmlBytes));
+  const [documentXml, stylesXml] = await Promise.all([
+    readDocxXml(bytes, "word/document.xml"),
+    readDocxXml(bytes, "word/styles.xml", false),
+  ]);
+  const xml = docxTextWithAnswerMarkers(documentXml, markedStyleIds(stylesXml));
   return parseText(xml, fileName, "DOCX");
 }
 
