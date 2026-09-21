@@ -155,13 +155,45 @@ function parseCsv(source: string, fileName: string): ParsedUpload {
   return { questions, suggestedTitle: safeTitle(fileName), diagnostics: diagnostics("CSV", raw.length, questions, incomplete, questions.length) };
 }
 
-function lineOption(line: string) {
+type ParsedLineOption = { label: string; text: string; numeric: boolean; marked: boolean; start: number };
+
+function lineOption(line: string): ParsedLineOption | null {
   const marked = isMarked(line);
   const cleaned = withoutMarkers(line).replace(/^\s*[-•▪◦*]\s*/, "").trim();
   const match = cleaned.match(new RegExp(`^\\(?\\s*([${acceptedLabels}])\\s*\\)?\\s*(?:[.)、:：\\-]|\\s+)\\s*(.+)$`, "i"));
   if (!match) return null;
   const label = optionLabel(match[1], 0);
-  return { label, text: text(match[2]), numeric: /^\d$/.test(label), marked };
+  return { label, text: text(match[2]), numeric: /^\d$/.test(label), marked, start: 0 };
+}
+
+// Teachers often place two or more choices on one Word line: "ก. ... ข. ...".
+// Read each label separately instead of saving the whole line as just choice ก.
+function lineOptions(line: string): ParsedLineOption[] {
+  const cleaned = withoutMarkers(line).replace(/^\s*[-•▪◦*]\s*/, "").trim();
+  // Some Word files omit the space between choices: "ก.ข้อความข.ข้อความ".
+  // Only split a line that itself starts as an option, so labels mentioned in
+  // an ordinary question sentence are not mistaken for choices.
+  const startsAsOption = new RegExp(`^\\(?\\s*[${acceptedLabels}]\\s*\\)?\\s*[.)、:：\\-]\\s*`, "i").test(cleaned);
+  const labels = startsAsOption ? [...cleaned.matchAll(new RegExp(`([${acceptedLabels}])\\s*[.)、:：\\-]\\s*`, "gi"))] : [];
+  if (labels.length < 2) {
+    const option = lineOption(line);
+    return option ? [option] : [];
+  }
+  return labels.map((match, index) => {
+    const label = optionLabel(match[1], index);
+    const start = match.index ?? 0;
+    const textStart = start + match[0].length;
+    const textEnd = index + 1 < labels.length ? (labels[index + 1].index ?? cleaned.length) : cleaned.length;
+    return {
+      label,
+      text: text(cleaned.slice(textStart, textEnd)),
+      numeric: /^\d$/.test(label),
+      // A marker on a line containing several choices is ambiguous. Do not
+      // silently mark every choice correct; the teacher can choose it in Edit.
+      marked: false,
+      start,
+    };
+  }).filter((option) => option.text);
 }
 
 function lineQuestion(line: string) {
@@ -189,10 +221,37 @@ function answerMapFrom(source: string) {
   return answers;
 }
 
+function isAnswerEntryLine(line: string) {
+  const answerWords = "(?:เฉลย(?:ที่ถูก)?|คำตอบ(?:ที่ถูก)?|answer(?:\\s*key)?|ans\\.?|correct(?:\\s*answer)?|ตอบ|คือ|ได้แก่|เป็น)";
+  // Require an actual one-character answer label. Without the delimiter after
+  // it, a question such as "8.เป็นการควบคุม..." could be misread as answer ก.
+  return new RegExp(`^\\s*(?:เฉลย\\s*)?(?:ข้อ(?:ที่)?\\s*)?[${numberCharacters}]{1,3}\\s*(?:[.)、:：\\-=]\\s*)?${answerWords}\\s*[:：\\-]?\\s*\\(?\\s*[${acceptedLabels}](?=$|[\\s,;|()])`, "i").test(withoutMarkers(line));
+}
+
+function isAnswerHeading(line: string) {
+  return /^(?:(?:เฉลย|คำตอบ)(?:\s|[:：\-]|ข้อ|รวม|$)|answer(?:\s*key)?\b|correct\s*answers?\b)/i.test(withoutMarkers(line));
+}
+
+function findAnswerStart(lines: string[]) {
+  // A true answer entry is more trustworthy than a title such as
+  // "เฉลยแบบทดสอบหน่วยที่ 1", which can appear before the questions.
+  const directEntry = lines.findIndex(isAnswerEntryLine);
+  if (directEntry >= 0) return directEntry;
+
+  return lines.findIndex((line, index) => {
+    if (!isAnswerHeading(line)) return false;
+    // Accept a heading only if it is followed by actual keyed answers. This
+    // prevents a document title containing the word "เฉลย" from hiding all
+    // questions that follow it.
+    const nearby = lines.slice(index, index + 25).join("\n");
+    return answerMapFrom(nearby).size >= 2;
+  });
+}
+
 function parseText(source: string, fileName: string, sourceFormat: "TXT" | "DOCX" = "TXT"): ParsedUpload {
   const clean = decodeEntities(source.replace(/\r/g, "").replace(/\u00a0/g, " "));
   const lines = clean.split("\n").map((line) => line.trim()).filter(Boolean);
-  const answerStart = lines.findIndex((line) => /^(?:(?:เฉลย|คำตอบ)(?:\s|[:：\-]|แบบ|ข้อ|รวม|$)|answer(?:\s*key)?\b|correct\s*answers?\b)/i.test(withoutMarkers(line)));
+  const answerStart = findAnswerStart(lines);
   const questionLines = answerStart >= 0 ? lines.slice(0, answerStart) : lines;
   const answerLines = answerStart >= 0 ? lines.slice(answerStart) : [];
   const answers = answerMapFrom(answerLines.join("\n"));
@@ -217,28 +276,54 @@ function parseText(source: string, fileName: string, sourceFormat: "TXT" | "DOCX
     const cleanLine = withoutMarkers(line);
     const inline = cleanLine.match(new RegExp(`(?:เฉลย|คำตอบ|answer|ans\\.?|correct)\\s*[:：\\-]?\\s*\\(?\\s*([${acceptedLabels}])`, "i"));
     if (current && inline) { current.inlineAnswer = optionLabel(inline[1], 0); continue; }
-    const option = lineOption(line);
+    const options = lineOptions(line);
+    const option = options[0];
     const header = lineQuestion(line);
     const expectedOptionNumber = current ? current.options.length + 1 : 0;
     const hasReliableCurrentAnswer = Boolean(current && (current.inlineAnswer || answers.get(current.number) || current.markedAnswers.length === 1));
+    const currentUsesNumericOptions = Boolean(current?.options.some((entry) => /^\d+$/.test(entry.label)));
     const startsNewQuestion = Boolean(header && (!current
       || !option
       || !option.numeric
       || Number(option.label) !== expectedOptionNumber
       || header.explicit
-      || (header.number === current.number + 1 && current.options.length >= 2 && hasReliableCurrentAnswer)));
+      // When the previous question uses Thai/letter labels, the next 5. / 6.
+      // can only be a question number, even when this document has no answer
+      // formatting for us to rely on.
+      || (header.number === current.number + 1 && current.options.length >= 2 && (!currentUsesNumericOptions || hasReliableCurrentAnswer))));
     if (header && startsNewQuestion) {
       finish();
       candidates += 1;
-      current = { number: header.number, question: [header.question], options: [], markedAnswers: [] };
+      // If a question and its choices share a single line, keep only the stem
+      // as the question and add the remaining labelled pieces as choices.
+      const firstChoice = options.find((entry, index) => index > 0 && !entry.numeric);
+      const lineText = withoutMarkers(line).trim();
+      const headerTextStart = lineText.indexOf(header.question);
+      const question = firstChoice && headerTextStart >= 0 && firstChoice.start > headerTextStart
+        ? text(lineText.slice(headerTextStart, firstChoice.start))
+        : header.question;
+      current = { number: header.number, question: [question], options: [], markedAnswers: [] };
+      for (const entry of options) {
+        // The leading 1. / 2. is the question number, not its first choice.
+        if (entry === options[0] && entry.numeric && Number(entry.label) === header.number) continue;
+        if (!current.options.some((existing) => existing.label === entry.label)) {
+          current.options.push({ label: entry.label, text: entry.text });
+          if (entry.marked) current.markedAnswers.push(entry.label);
+        }
+      }
       continue;
     }
-    if (current && option) {
-      if (!option.numeric || Number(option.label) === expectedOptionNumber) {
-        current.options.push({ label: option.label, text: option.text });
-        if (option.marked && !current.markedAnswers.includes(option.label)) current.markedAnswers.push(option.label);
-        continue;
+    if (current && options.length) {
+      let added = false;
+      for (const entry of options) {
+        const expected = current.options.length + 1;
+        if ((!entry.numeric || Number(entry.label) === expected) && !current.options.some((existing) => existing.label === entry.label)) {
+          current.options.push({ label: entry.label, text: entry.text });
+          if (entry.marked && !current.markedAnswers.includes(entry.label)) current.markedAnswers.push(entry.label);
+          added = true;
+        }
       }
+      if (added) continue;
     }
     if (current && !option) {
       current.question.push(line);

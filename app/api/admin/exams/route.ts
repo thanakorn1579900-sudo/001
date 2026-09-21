@@ -35,7 +35,7 @@ export async function POST(request: Request) {
     const parsed = await parseExamUpload(file.name, await file.arrayBuffer());
     if (!parsed.questions.length) {
       const found = parsed.diagnostics.candidates;
-      return Response.json({ error: found ? `ตรวจพบโจทย์ ${found} ข้อ แต่ยังไม่พบข้อที่มีตัวเลือกและเฉลยครบ กรุณาตรวจรูปแบบไฟล์` : "ไม่พบโจทย์ในไฟล์ กรุณาตรวจรูปแบบไฟล์ก่อนอัปโหลด" }, { status: 400 });
+      return Response.json({ error: found ? `ตรวจพบโจทย์ ${found} ข้อ แต่ยังไม่พบข้อที่มีตัวเลือกและเฉลยครบ ให้ใส่เฉลยแบบ 1.เฉลย: ข หรือ เฉลย 1. ข หรือทำตัวเลือกที่ถูกเป็นสีแดง / All caps` : "ไม่พบโจทย์ในไฟล์ กรุณาตรวจรูปแบบไฟล์ก่อนอัปโหลด" }, { status: 400 });
     }
     if (parsed.questions.length > 200) return Response.json({ error: "หนึ่งไฟล์มีข้อสอบได้ไม่เกิน 200 ข้อ" }, { status: 400 });
 
