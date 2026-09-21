@@ -2,6 +2,7 @@ import { getExam } from "@/lib/exam-catalog";
 import { defaultExamSubjectId, isExamSubjectId } from "@/lib/exam-subjects";
 import { getExamEnabled } from "@/db/repository";
 import { getUploadedExam } from "@/lib/uploaded-exams";
+import { ensureThanakornTeacher, getTeacher, THANAKORN_TEACHER_ID, THANAKORN_TEACHER_NAME } from "@/lib/teacher-accounts";
 import { after } from "next/server";
 
 export const runtime = "edge";
@@ -24,7 +25,18 @@ const cleanText = (value: unknown, maxLength: number) =>
 const getSubjectId = (value: unknown) => typeof value === "string" ? value.trim().slice(0, 120) : defaultExamSubjectId;
 
 async function resolveExam(subjectId: string) {
-  return isExamSubjectId(subjectId) ? getExam(subjectId) : getUploadedExam(subjectId);
+  if (!isExamSubjectId(subjectId)) return getUploadedExam(subjectId);
+  const exam = getExam(subjectId);
+  return {
+    ...exam,
+    subject: { ...exam.subject, teacherId: THANAKORN_TEACHER_ID, teacherName: THANAKORN_TEACHER_NAME },
+  };
+}
+
+async function teacherExamIsOpen(exam: NonNullable<Awaited<ReturnType<typeof resolveExam>>>) {
+  await ensureThanakornTeacher();
+  const teacher = await getTeacher(exam.subject.teacherId);
+  return Boolean(teacher?.status === "approved" && teacher.examEnabled);
 }
 
 export async function GET(request: Request) {
@@ -33,6 +45,7 @@ export async function GET(request: Request) {
   const subjectId = getSubjectId(new URL(request.url).searchParams.get("subject"));
   const exam = await resolveExam(subjectId);
   if (!exam) return Response.json({ error: "ไม่พบข้อสอบรายวิชานี้" }, { status: 404 });
+  if (!(await teacherExamIsOpen(exam))) return Response.json({ error: "ครูผู้สอนปิดข้อสอบอยู่" }, { status: 423 });
   const questions = exam.questions.map(({ answer: _answer, ...question }) => question);
   return Response.json({
     subject: exam.subject,
@@ -76,6 +89,7 @@ export async function POST(request: Request) {
     classLevel,
     studentId,
     subject: exam.subject.title,
+    teacher: exam.subject.teacherName,
     score,
     total,
     percent: Math.round((score / total) * 100),

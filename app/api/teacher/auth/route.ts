@@ -1,10 +1,10 @@
-import { findTeacherForLogin, getTeacher } from "@/lib/teacher-accounts";
+import { ensureThanakornTeacher, findTeacherForLogin, getTeacher } from "@/lib/teacher-accounts";
 import { createTeacherSession, teacherSessionCookie, teacherSessionId, teacherSessionSeconds, verifyTeacherPassword } from "@/lib/teacher-auth";
 
 export const runtime = "edge";
 
-function safeTeacher(teacher: { id: string; name: string; email: string }) {
-  return { id: teacher.id, name: teacher.name, email: teacher.email };
+function safeTeacher(teacher: { id: string; name: string; email: string; examEnabled: boolean }) {
+  return { id: teacher.id, name: teacher.name, email: teacher.email, examEnabled: teacher.examEnabled };
 }
 
 export async function GET(request: Request) {
@@ -24,6 +24,7 @@ export async function POST(request: Request) {
     const body = await request.json() as { action?: unknown; email?: unknown; password?: unknown };
     if (body.action === "logout") return Response.json({ authenticated: false }, { headers: { "set-cookie": teacherSessionCookie("", 0) } });
     if (body.action !== "login" || typeof body.email !== "string" || typeof body.password !== "string") return Response.json({ error: "ข้อมูลเข้าสู่ระบบไม่ถูกต้อง" }, { status: 400 });
+    await ensureThanakornTeacher();
     const teacher = await findTeacherForLogin(body.email);
     if (!teacher || !(await verifyTeacherPassword(body.password, teacher.passwordSalt, teacher.passwordHash))) return Response.json({ error: "อีเมลหรือรหัสผ่านไม่ถูกต้อง" }, { status: 401 });
     if (teacher.status === "pending") return Response.json({ error: "บัญชีครูกำลังรอผู้ดูแลระบบยืนยันสิทธิ์" }, { status: 403 });

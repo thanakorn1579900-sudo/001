@@ -1,4 +1,4 @@
-import { createTeacher, listTeachers, normalizeEmail } from "@/lib/teacher-accounts";
+import { createTeacher, ensureThanakornTeacher, listOpenTeachers, normalizeEmail } from "@/lib/teacher-accounts";
 import { hashTeacherPassword } from "@/lib/teacher-auth";
 
 export const runtime = "edge";
@@ -7,8 +7,9 @@ const clean = (value: unknown, maxLength: number) => typeof value === "string" ?
 
 export async function GET() {
   try {
-    const teachers = await listTeachers("approved");
-    return Response.json({ teachers: [{ id: "system", name: "ครูธนากร สมปาน" }, ...teachers.map(({ id, name }) => ({ id, name }))] });
+    await ensureThanakornTeacher();
+    const teachers = await listOpenTeachers();
+    return Response.json({ teachers: teachers.map(({ id, name }) => ({ id, name })) });
   } catch {
     return Response.json({ error: "ยังโหลดรายชื่อครูไม่ได้" }, { status: 503 });
   }

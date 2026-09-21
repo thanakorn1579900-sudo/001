@@ -1,4 +1,5 @@
 import { env } from "cloudflare:workers";
+import { THANAKORN_TEACHER_ID } from "@/lib/teacher-accounts";
 
 export type UploadedOption = { label: string; text: string };
 export type UploadedQuestion = { id: number; question: string; options: UploadedOption[]; answer: string };
@@ -13,7 +14,7 @@ export type UploadedExamSummary = {
   createdAt: string;
 };
 
-type StoredExamRow = Omit<UploadedExamSummary, "teacherName"> & { questionsJson: string };
+type StoredExamRow = UploadedExamSummary & { questionsJson: string };
 type StoredAdminExamRow = StoredExamRow & { sourceObjectKey: string };
 
 function database() {
@@ -67,7 +68,7 @@ export async function listUploadedExamSummaries(teacherId?: string): Promise<Upl
 
 export async function getUploadedExam(id: string) {
   const row = await database()
-    .prepare("SELECT id, title, description, teacher_id AS teacherId, question_count AS questionCount, source_file_name AS sourceFileName, created_at AS createdAt, questions_json AS questionsJson FROM uploaded_exams WHERE id = ? LIMIT 1")
+    .prepare("SELECT e.id, e.title, e.description, e.teacher_id AS teacherId, COALESCE(t.name, 'ครูธนากร สมปาน') AS teacherName, e.question_count AS questionCount, e.source_file_name AS sourceFileName, e.created_at AS createdAt, e.questions_json AS questionsJson FROM uploaded_exams e LEFT JOIN teacher_accounts t ON t.id = e.teacher_id WHERE e.id = ? LIMIT 1")
     .bind(id)
     .first<StoredExamRow>();
   if (!row) return null;
@@ -79,6 +80,8 @@ export async function getUploadedExam(id: string) {
       title: row.title,
       description: row.description,
       questionCount: row.questionCount,
+      teacherId: row.teacherId,
+      teacherName: row.teacherName,
     },
     title: row.title,
     questions,
@@ -112,7 +115,7 @@ export async function saveUploadedExam(input: {
       input.description,
       input.sourceFileName,
       input.sourceObjectKey,
-      input.teacherId ?? "system",
+      input.teacherId ?? THANAKORN_TEACHER_ID,
       input.questions.length,
       JSON.stringify(input.questions),
     )

@@ -41,7 +41,8 @@ import { Label } from "@/components/ui/label";
 import { Progress } from "@/components/ui/progress";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Textarea } from "@/components/ui/textarea";
-import { examSubjects, defaultExamSubjectId } from "@/lib/exam-subjects";
+import { Switch } from "@/components/ui/switch";
+import { examSubjects } from "@/lib/exam-subjects";
 
 type Option = { label: string; text: string };
 type Question = { id: number; question: string; options: Option[] };
@@ -65,8 +66,8 @@ type Result = {
 };
 type SystemStatus = { examEnabled: boolean };
 type AdminStatus = { authenticated: boolean; examEnabled: boolean };
-type Teacher = { id: string; name: string; email?: string; status?: "pending" | "approved" | "rejected"; createdAt?: string; approvedAt?: string | null };
-type TeacherStatus = { authenticated: boolean; teacher?: Pick<Teacher, "id" | "name" | "email"> };
+type Teacher = { id: string; name: string; email?: string; status?: "pending" | "approved" | "rejected"; examEnabled?: boolean; createdAt?: string; approvedAt?: string | null };
+type TeacherStatus = { authenticated: boolean; teacher?: Pick<Teacher, "id" | "name" | "email" | "examEnabled"> };
 type UploadedExam = Subject & { sourceFileName: string; createdAt: string; teacherId: string; teacherName: string };
 type EditableQuestion = Question & { answer: string };
 type EditableExam = UploadedExam & { questions: EditableQuestion[] };
@@ -86,7 +87,7 @@ export function ExamApp() {
   const [adminPassword, setAdminPassword] = useState("");
   const [adminBusy, setAdminBusy] = useState(false);
   const [uploadedExams, setUploadedExams] = useState<UploadedExam[]>([]);
-  const [teachers, setTeachers] = useState<Teacher[]>([{ id: "system", name: "ครูธนากร สมปาน" }]);
+  const [teachers, setTeachers] = useState<Teacher[]>([]);
   const [teacherAccounts, setTeacherAccounts] = useState<Teacher[]>([]);
   const [teacher, setTeacher] = useState<TeacherStatus | null>(null);
   const [teacherExams, setTeacherExams] = useState<UploadedExam[]>([]);
@@ -95,9 +96,9 @@ export function ExamApp() {
   const [uploadNotice, setUploadNotice] = useState("");
   const [exam, setExam] = useState<ExamData | null>(null);
   const [loadError, setLoadError] = useState("");
-  const [subjects, setSubjects] = useState<Subject[]>([...examSubjects]);
-  const [selectedTeacherId, setSelectedTeacherId] = useState("system");
-  const [selectedSubjectId, setSelectedSubjectId] = useState<string>(defaultExamSubjectId);
+  const [subjects, setSubjects] = useState<Subject[]>([]);
+  const [selectedTeacherId, setSelectedTeacherId] = useState("");
+  const [selectedSubjectId, setSelectedSubjectId] = useState<string>("");
   const [screen, setScreen] = useState<"register" | "exam" | "result">("register");
   const [form, setForm] = useState({ name: "", classLevel: "", studentId: "" });
   const [answers, setAnswers] = useState<Record<string, string>>({});
@@ -132,14 +133,20 @@ export function ExamApp() {
       const response = await fetch("/api/teachers", { cache: "no-store" });
       const data = await response.json() as { teachers?: Teacher[]; error?: string };
       if (!response.ok || !Array.isArray(data.teachers)) throw new Error(data.error || "ไม่สามารถโหลดรายชื่อครูได้");
-      setTeachers(data.teachers);
-      setSelectedTeacherId((current) => data.teachers?.some((item) => item.id === current) ? current : "system");
+      const availableTeachers = data.teachers;
+      setTeachers(availableTeachers);
+      setSelectedTeacherId((current) => availableTeachers.some((item) => item.id === current) ? current : availableTeachers[0]?.id || "");
     } catch {
-      // The school's own teacher remains visible if the teacher list is temporarily unavailable.
+      setTeachers([]);
     }
   };
 
   const refreshSubjects = async (teacherId = selectedTeacherId) => {
+    if (!teacherId) {
+      setSubjects([]);
+      setSelectedSubjectId("");
+      return;
+    }
     try {
       const response = await fetch(`/api/subjects?teacher=${encodeURIComponent(teacherId)}`, { cache: "no-store" });
       const data = await response.json() as { subjects?: Subject[]; error?: string };
@@ -147,7 +154,8 @@ export function ExamApp() {
       setSubjects(data.subjects);
       setSelectedSubjectId((current) => data.subjects?.some((subject) => subject.id === current) ? current : data.subjects?.[0]?.id || "");
     } catch {
-      if (teacherId === "system") setSubjects([...examSubjects]);
+      setSubjects([]);
+      setSelectedSubjectId("");
     }
   };
 
@@ -384,6 +392,27 @@ export function ExamApp() {
     }
   };
 
+  const setTeacherExamEnabled = async (examEnabled: boolean) => {
+    setAdminBusy(true);
+    setAccountError("");
+    try {
+      const response = await fetch("/api/teacher/exam-status", {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ examEnabled }),
+      });
+      const data = await response.json() as { examEnabled?: boolean; message?: string; error?: string };
+      if (!response.ok || typeof data.examEnabled !== "boolean") throw new Error(data.error || "ไม่สามารถเปลี่ยนสถานะข้อสอบได้");
+      setTeacher((current) => current?.teacher ? { ...current, teacher: { ...current.teacher, examEnabled: data.examEnabled } } : current);
+      setAccountError(data.message || "บันทึกสถานะข้อสอบแล้ว");
+      await refreshTeachers();
+    } catch (error) {
+      setAccountError(error instanceof Error ? error.message : "ไม่สามารถเปลี่ยนสถานะข้อสอบได้");
+    } finally {
+      setAdminBusy(false);
+    }
+  };
+
   const registerTeacher = async (input: { name: string; email: string; password: string }) => {
     setAdminBusy(true);
     setAccountError("");
@@ -515,7 +544,7 @@ export function ExamApp() {
   }
 
   if (portal === "teacher") {
-    return <TeacherPortal teacher={teacher} busy={adminBusy} error={accountError} exams={teacherExams} uploadBusy={uploadBusy} uploadError={uploadError} uploadNotice={uploadNotice} onBack={() => { setPortal("student"); setAccountError(""); }} onRefresh={() => void refreshTeacher()} onLogin={(email, password) => void setTeacherAuth("login", email, password)} onLogout={() => void setTeacherAuth("logout")} onRegister={(input) => registerTeacher(input)} onUpload={uploadTeacherExam} />;
+    return <TeacherPortal teacher={teacher} busy={adminBusy} error={accountError} exams={teacherExams} uploadBusy={uploadBusy} uploadError={uploadError} uploadNotice={uploadNotice} onBack={() => { setPortal("student"); setAccountError(""); }} onRefresh={() => void refreshTeacher()} onLogin={(email, password) => void setTeacherAuth("login", email, password)} onLogout={() => void setTeacherAuth("logout")} onRegister={(input) => registerTeacher(input)} onSetExamEnabled={(enabled) => void setTeacherExamEnabled(enabled)} onUpload={uploadTeacherExam} />;
   }
 
   if (!system.examEnabled) {
@@ -880,7 +909,7 @@ function AdminPortal({ admin, password, setPassword, busy, error, uploadedExams,
   );
 }
 
-function TeacherPortal({ teacher, busy, error, exams, uploadBusy, uploadError, uploadNotice, onBack, onRefresh, onLogin, onLogout, onRegister, onUpload }: {
+function TeacherPortal({ teacher, busy, error, exams, uploadBusy, uploadError, uploadNotice, onBack, onRefresh, onLogin, onLogout, onRegister, onSetExamEnabled, onUpload }: {
   teacher: TeacherStatus | null;
   busy: boolean;
   error: string;
@@ -893,6 +922,7 @@ function TeacherPortal({ teacher, busy, error, exams, uploadBusy, uploadError, u
   onLogin: (email: string, password: string) => void;
   onLogout: () => void;
   onRegister: (input: { name: string; email: string; password: string }) => Promise<boolean>;
+  onSetExamEnabled: (enabled: boolean) => void;
   onUpload: (input: { file: File; title: string; description: string }) => Promise<boolean>;
 }) {
   const [mode, setMode] = useState<"login" | "register">("login");
@@ -913,7 +943,9 @@ function TeacherPortal({ teacher, busy, error, exams, uploadBusy, uploadError, u
     </form><div className="mt-5 flex items-center justify-between gap-3"><button type="button" onClick={() => { setMode((current) => current === "login" ? "register" : "login"); setPassword(""); }} className="text-sm font-semibold text-[#0e5965] hover:underline">{mode === "login" ? "ยังไม่มีบัญชี? สมัครครู" : "มีบัญชีแล้ว? เข้าสู่ระบบ"}</button><button type="button" onClick={onBack} className="text-sm font-semibold text-[#567279] hover:underline">กลับหน้าข้อสอบ</button></div></section></main>;
   }
 
+  const examEnabled = Boolean(teacher.teacher?.examEnabled);
   return <main className="min-h-screen px-4 py-8"><section className="mx-auto w-full max-w-3xl overflow-hidden rounded-3xl border border-[#c5dcda] bg-white shadow-[0_24px_70px_rgb(18_60_69/12%)]"><div className="bg-[#0e5965] px-7 py-8 text-white sm:px-10"><div className="flex items-center justify-between gap-4"><div><p className="flex items-center gap-2 text-sm font-semibold text-[#dff0ec]"><UsersRound className="size-4" /> พื้นที่ครูผู้สอน</p><h1 className="mt-3 text-3xl font-bold">{teacher.teacher?.name}</h1><p className="mt-1 text-sm text-[#dff0ec]">อัปโหลดและจัดการข้อสอบของคุณ</p></div><Button type="button" variant="secondary" onClick={onLogout}>ออกจากระบบ</Button></div></div><div className="space-y-7 p-7 sm:p-10">
+    <section className={`flex flex-col gap-4 rounded-2xl border p-5 sm:flex-row sm:items-center sm:justify-between ${examEnabled ? "border-[#9acfc3] bg-[#e9f6f1]" : "border-[#e9c48e] bg-[#fff6e5]"}`}><div><h2 className="font-bold text-[#173f47]">การเปิดรับข้อสอบของฉัน</h2><p className="mt-1 text-sm leading-6 text-[#526b73]">{examEnabled ? "นักเรียนเห็นชื่อครูและเริ่มทำข้อสอบของคุณได้" : "นักเรียนจะไม่เห็นชื่อครูหรือข้อสอบของคุณ"}</p></div><div className="flex items-center gap-3"><span className={`text-sm font-semibold ${examEnabled ? "text-[#17604f]" : "text-[#8b511b]"}`}>{examEnabled ? "เปิดข้อสอบ" : "ปิดข้อสอบ"}</span><Switch checked={examEnabled} disabled={busy} onCheckedChange={onSetExamEnabled} aria-label="เปิดหรือปิดข้อสอบของฉัน" className="data-[state=checked]:bg-[#17604f]" /></div></section>
     <section className="rounded-2xl border border-[#c7dada] bg-[#fbfefe] p-6"><div className="flex items-start gap-3"><div className="grid size-10 shrink-0 place-items-center rounded-xl bg-[#e6f2ef] text-[#0e5965]"><Upload className="size-5" /></div><div><h2 className="text-lg font-bold text-[#173f47]">อัปโหลดข้อสอบของฉัน</h2><p className="mt-1 text-sm leading-6 text-[#526b73]">นักเรียนจะเห็นชุดข้อสอบนี้เมื่อเลือกชื่อครูของคุณ</p></div></div><form className="mt-5 space-y-4" onSubmit={async (event) => { event.preventDefault(); if (!file) return; const complete = await onUpload({ file, title, description }); if (complete) { setFile(null); setTitle(""); setDescription(""); } }}><div className="space-y-2"><Label htmlFor="teacher-exam-file">ไฟล์ข้อสอบ</Label><Input id="teacher-exam-file" type="file" accept=".docx,.txt,.csv,.json" required onChange={(event) => setFile(event.target.files?.[0] ?? null)} /><p className="text-xs text-[#5d7479]">รองรับ DOCX, TXT, CSV และ JSON — ไฟล์ .doc ให้บันทึกเป็น .docx ก่อน</p></div><div className="grid gap-4 sm:grid-cols-2"><div className="space-y-2"><Label htmlFor="teacher-exam-title">ชื่อรายวิชา</Label><Input id="teacher-exam-title" value={title} onChange={(event) => setTitle(event.target.value)} placeholder="เว้นว่างเพื่อใช้ชื่อไฟล์" /></div><div className="space-y-2"><Label htmlFor="teacher-exam-description">คำอธิบาย</Label><Input id="teacher-exam-description" value={description} onChange={(event) => setDescription(event.target.value)} placeholder="เช่น สอบปลายภาค" /></div></div>{uploadError ? <p className="rounded-xl border border-[#e9c48e] bg-[#fff6e5] px-4 py-3 text-sm font-medium text-[#8b511b]">{uploadError}</p> : null}{uploadNotice ? <p className="rounded-xl border border-[#9acfc3] bg-[#e9f6f1] px-4 py-3 text-sm font-medium text-[#17604f]">{uploadNotice}</p> : null}<Button type="submit" disabled={!file || uploadBusy} className="bg-[#0e5965] hover:bg-[#094852]">{uploadBusy ? <LoaderCircle className="animate-spin" /> : <Upload />} ประมวลผลและเพิ่มข้อสอบ</Button></form></section>
     <section className="rounded-2xl border border-[#d8e5e5] bg-white p-6"><div className="flex items-center justify-between gap-3"><div><h2 className="text-lg font-bold text-[#173f47]">ข้อสอบของฉัน</h2><p className="mt-1 text-sm text-[#526b73]">นักเรียนเลือกเห็นได้เฉพาะรายการเหล่านี้</p></div><Button type="button" variant="outline" size="sm" onClick={onRefresh}><RefreshCw /> รีเฟรช</Button></div>{exams.length ? <div className="mt-4 divide-y divide-[#e0ecec]">{exams.map((item) => <div key={item.id} className="py-4 first:pt-0 last:pb-0"><p className="font-semibold text-[#173f47]">{item.title}</p><p className="mt-1 text-sm text-[#526b73]">{item.description}</p><p className="mt-1 text-xs text-[#6e8589]">{item.questionCount} ข้อ · {item.sourceFileName}</p></div>)}</div> : <p className="mt-4 rounded-xl bg-[#f3f7f7] px-4 py-3 text-sm text-[#5d7479]">ยังไม่มีข้อสอบที่อัปโหลด</p>}</section>
   </div></section></main>;

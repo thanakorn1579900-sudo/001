@@ -36,12 +36,14 @@ export const teacherAccounts = sqliteTable(
     passwordHash: text("password_hash").notNull(),
     passwordSalt: text("password_salt").notNull(),
     status: text("status").notNull().default("pending"),
+    examEnabled: integer("exam_enabled", { mode: "boolean" }).notNull().default(false),
     createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
     approvedAt: text("approved_at"),
   },
   (table) => [
     uniqueIndex("uq_teacher_accounts_email").on(table.email),
     index("idx_teacher_accounts_status").on(table.status),
+    index("idx_teacher_accounts_public").on(table.status, table.examEnabled),
   ],
 );
 
