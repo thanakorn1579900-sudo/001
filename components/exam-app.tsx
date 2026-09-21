@@ -389,6 +389,24 @@ export function ExamApp() {
     }
   };
 
+  const manageTeacherAccount = async (action: "rename" | "resetPassword", id: string, name?: string) => {
+    setAdminBusy(true);
+    setAccountError("");
+    try {
+      const response = await fetch("/api/admin/teachers", { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ action, id, name }) });
+      const data = await response.json() as { error?: string; message?: string };
+      if (!response.ok) throw new Error(data.error || "ไม่สามารถจัดการบัญชีครูได้");
+      setAccountError(data.message || "บันทึกข้อมูลบัญชีครูแล้ว");
+      await Promise.all([refreshTeacherAccounts(), refreshTeachers()]);
+      return true;
+    } catch (error) {
+      setAccountError(error instanceof Error ? error.message : "ไม่สามารถจัดการบัญชีครูได้");
+      return false;
+    } finally {
+      setAdminBusy(false);
+    }
+  };
+
   const setTeacherAuth = async (action: "login" | "logout", email = "", password = "") => {
     setAdminBusy(true);
     setAccountError("");
@@ -553,7 +571,7 @@ export function ExamApp() {
   }
 
   if (portal === "admin") {
-    return <AdminPortal admin={admin} password={adminPassword} setPassword={setAdminPassword} busy={adminBusy} error={accountError} uploadedExams={uploadedExams} teacherAccounts={teacherAccounts} uploadBusy={uploadBusy} uploadError={uploadError} uploadNotice={uploadNotice} onBack={() => { setPortal("student"); setAccountError(""); }} onLogin={() => void setAdmin("login")} onLogout={() => void setAdmin("logout")} onSetEnabled={(enabled) => void setAdmin("setExamEnabled", enabled)} onTeacherDecision={(id, status) => void decideTeacher(id, status)} onUpload={uploadExam} onDataChanged={() => { void Promise.all([refreshUploadedExams(), refreshSubjects(selectedTeacherId)]); }} />;
+    return <AdminPortal admin={admin} password={adminPassword} setPassword={setAdminPassword} busy={adminBusy} error={accountError} uploadedExams={uploadedExams} teacherAccounts={teacherAccounts} uploadBusy={uploadBusy} uploadError={uploadError} uploadNotice={uploadNotice} onBack={() => { setPortal("student"); setAccountError(""); }} onLogin={() => void setAdmin("login")} onLogout={() => void setAdmin("logout")} onSetEnabled={(enabled) => void setAdmin("setExamEnabled", enabled)} onTeacherDecision={(id, status) => void decideTeacher(id, status)} onTeacherAccountChange={manageTeacherAccount} onUpload={uploadExam} onDataChanged={() => { void Promise.all([refreshUploadedExams(), refreshSubjects(selectedTeacherId)]); }} />;
   }
 
   if (portal === "teacher") {
@@ -724,7 +742,7 @@ export function ExamApp() {
   );
 }
 
-function AdminPortal({ admin, password, setPassword, busy, error, uploadedExams, teacherAccounts, uploadBusy, uploadError, uploadNotice, onBack, onLogin, onLogout, onSetEnabled, onTeacherDecision, onUpload, onDataChanged }: {
+function AdminPortal({ admin, password, setPassword, busy, error, uploadedExams, teacherAccounts, uploadBusy, uploadError, uploadNotice, onBack, onLogin, onLogout, onSetEnabled, onTeacherDecision, onTeacherAccountChange, onUpload, onDataChanged }: {
   admin: AdminStatus | null;
   password: string;
   setPassword: (value: string) => void;
@@ -740,6 +758,7 @@ function AdminPortal({ admin, password, setPassword, busy, error, uploadedExams,
   onLogout: () => void;
   onSetEnabled: (enabled: boolean) => void;
   onTeacherDecision: (id: string, status: "approved" | "rejected") => void;
+  onTeacherAccountChange: (action: "rename" | "resetPassword", id: string, name?: string) => Promise<boolean>;
   onUpload: (input: { file: File; title: string; description: string }) => Promise<boolean>;
   onDataChanged: () => void;
 }) {
@@ -752,6 +771,9 @@ function AdminPortal({ admin, password, setPassword, busy, error, uploadedExams,
   const [editorError, setEditorError] = useState("");
   const [editorNotice, setEditorNotice] = useState("");
   const [deleteTarget, setDeleteTarget] = useState<UploadedExam | null>(null);
+  const [teacherEdit, setTeacherEdit] = useState<Teacher | null>(null);
+  const [teacherName, setTeacherName] = useState("");
+  const [teacherReset, setTeacherReset] = useState<Teacher | null>(null);
 
   const loadExam = async (id: string, mode: "view" | "edit") => {
     setEditorBusy(true);
@@ -891,7 +913,7 @@ function AdminPortal({ admin, password, setPassword, busy, error, uploadedExams,
         <div className="space-y-7 p-7 sm:p-10"><div className={`rounded-2xl border p-6 ${status ? "border-[#9acfc3] bg-[#e9f6f1]" : "border-[#e9c48e] bg-[#fff6e5]"}`}><div className="flex flex-col justify-between gap-5 sm:flex-row sm:items-center"><div><p className="text-sm font-semibold text-[#526b73]">สถานะระบบสอบ</p><p className={`mt-1 text-2xl font-bold ${status ? "text-[#17604f]" : "text-[#8b511b]"}`}>{status ? "เปิดรับนักเรียนเข้าสอบ" : "ปิดระบบสอบ"}</p><p className="mt-2 max-w-md text-sm leading-6 text-[#526b73]">{status ? "นักเรียนจึงจะโหลดข้อสอบได้" : "นักเรียนจะไม่สามารถเปิดดูข้อสอบหรือเริ่มสอบได้"}</p></div><Button type="button" disabled={busy} onClick={() => onSetEnabled(!status)} className={status ? "bg-[#9b3d32] hover:bg-[#7f3027]" : "bg-[#0e5965] hover:bg-[#094852]"}>{busy ? <LoaderCircle className="animate-spin" /> : <Power />}{status ? "ปิดระบบสอบ" : "เปิดระบบสอบ"}</Button></div></div>{error ? <p className="rounded-xl border border-[#e9c48e] bg-[#fff6e5] px-4 py-3 text-sm font-medium text-[#8b511b]">{error}</p> : null}
 
           <section className="rounded-2xl border border-[#c7dada] bg-[#fbfefe] p-6"><div className="flex items-start gap-3"><div className="grid size-10 shrink-0 place-items-center rounded-xl bg-[#e6f2ef] text-[#0e5965]"><UsersRound className="size-5" /></div><div><h2 className="text-lg font-bold text-[#173f47]">ยืนยันสิทธิ์ครู</h2><p className="mt-1 text-sm leading-6 text-[#526b73]">ครูที่สมัครใหม่ต้องได้รับการอนุมัติก่อนจึงจะเข้าสู่ระบบและอัปโหลดข้อสอบได้</p></div></div>
-            <div className="mt-5 space-y-3">{teacherAccounts.length ? teacherAccounts.map((item) => <div key={item.id} className="flex flex-col gap-3 rounded-xl border border-[#d8e5e5] bg-white p-4 sm:flex-row sm:items-center sm:justify-between"><div><p className="font-semibold text-[#173f47]">{item.name}</p><p className="mt-1 text-sm text-[#526b73]">{item.email}</p><p className={`mt-1 text-xs font-semibold ${item.status === "approved" ? "text-[#17604f]" : item.status === "pending" ? "text-[#8b511b]" : "text-[#9b3d32]"}`}>{item.status === "approved" ? "อนุมัติแล้ว" : item.status === "pending" ? "รออนุมัติ" : "ไม่อนุมัติ"}</p></div>{item.status === "pending" ? <div className="flex gap-2"><Button type="button" size="sm" disabled={busy} onClick={() => onTeacherDecision(item.id, "approved")} className="bg-[#17604f] hover:bg-[#114b3d]">อนุมัติ</Button><Button type="button" size="sm" variant="outline" disabled={busy} onClick={() => onTeacherDecision(item.id, "rejected")} className="border-[#e2aaa3] text-[#9b3d32]">ไม่อนุมัติ</Button></div> : null}</div>) : <p className="rounded-xl bg-white px-4 py-3 text-sm text-[#526b73]">ยังไม่มีคำขอสมัครครู</p>}</div>
+            <div className="mt-5 space-y-3">{teacherAccounts.length ? teacherAccounts.map((item) => <div key={item.id} className="flex flex-col gap-3 rounded-xl border border-[#d8e5e5] bg-white p-4 sm:flex-row sm:items-center sm:justify-between"><div><p className="font-semibold text-[#173f47]">{item.name}</p><p className="mt-1 text-sm text-[#526b73]">{item.email}</p><p className={`mt-1 text-xs font-semibold ${item.status === "approved" ? "text-[#17604f]" : item.status === "pending" ? "text-[#8b511b]" : "text-[#9b3d32]"}`}>{item.status === "approved" ? "อนุมัติแล้ว" : item.status === "pending" ? "รออนุมัติ" : "ไม่อนุมัติ"}</p></div><div className="flex flex-wrap gap-2">{item.status === "pending" ? <><Button type="button" size="sm" disabled={busy} onClick={() => onTeacherDecision(item.id, "approved")} className="bg-[#17604f] hover:bg-[#114b3d]">อนุมัติ</Button><Button type="button" size="sm" variant="outline" disabled={busy} onClick={() => onTeacherDecision(item.id, "rejected")} className="border-[#e2aaa3] text-[#9b3d32]">ไม่อนุมัติ</Button></> : null}<Button type="button" variant="outline" size="sm" disabled={busy} onClick={() => { setTeacherEdit(item); setTeacherName(item.name); }}><Pencil /> แก้ชื่อ</Button><Button type="button" variant="outline" size="sm" disabled={busy} onClick={() => setTeacherReset(item)}><RefreshCw /> รีเซ็ตรหัส</Button></div></div>) : <p className="rounded-xl bg-white px-4 py-3 text-sm text-[#526b73]">ยังไม่มีคำขอสมัครครู</p>}</div>
           </section>
 
           <section className="rounded-2xl border border-[#c7dada] bg-[#fbfefe] p-6"><div className="flex items-start gap-3"><div className="grid size-10 shrink-0 place-items-center rounded-xl bg-[#e6f2ef] text-[#0e5965]"><Upload className="size-5" /></div><div><h2 className="text-lg font-bold text-[#173f47]">เพิ่มข้อสอบจากไฟล์</h2><p className="mt-1 text-sm leading-6 text-[#526b73]">อัปโหลดไฟล์พร้อมโจทย์ ตัวเลือก และเฉลย ระบบจะสร้างรายวิชาใหม่และตรวจคะแนนให้อัตโนมัติ</p></div></div>
@@ -910,6 +932,12 @@ function AdminPortal({ admin, password, setPassword, busy, error, uploadedExams,
           <div className="rounded-xl bg-[#edf5f4] p-4 text-sm leading-6 text-[#365860]">การปิดระบบจะหยุดการเข้าถึงข้อสอบสำหรับผู้เรียนรายใหม่ทันที แต่ผู้ที่กำลังทำข้อสอบอยู่ยังส่งคำตอบได้ตามปกติ</div>
         </div>
       </section>
+      <Dialog open={Boolean(teacherEdit)} onOpenChange={(open) => { if (!open && !busy) setTeacherEdit(null); }}>
+        <DialogContent className="sm:max-w-md"><DialogHeader><DialogTitle>แก้ไขชื่อครู</DialogTitle><DialogDescription>ชื่อนี้จะแสดงให้นักเรียนเลือกและใช้แยกข้อมูลผลสอบ</DialogDescription></DialogHeader><div className="space-y-2"><Label htmlFor="admin-teacher-name">ชื่อครู</Label><Input id="admin-teacher-name" value={teacherName} onChange={(event) => setTeacherName(event.target.value)} maxLength={120} /></div><DialogFooter><Button type="button" variant="outline" disabled={busy} onClick={() => setTeacherEdit(null)}>ยกเลิก</Button><Button type="button" disabled={busy || !teacherName.trim()} onClick={() => { if (teacherEdit) void onTeacherAccountChange("rename", teacherEdit.id, teacherName).then((saved) => { if (saved) setTeacherEdit(null); }); }} className="bg-[#0e5965]">{busy ? <LoaderCircle className="animate-spin" /> : <Pencil />} บันทึกชื่อ</Button></DialogFooter></DialogContent>
+      </Dialog>
+      <Dialog open={Boolean(teacherReset)} onOpenChange={(open) => { if (!open && !busy) setTeacherReset(null); }}>
+        <DialogContent className="sm:max-w-md"><DialogHeader><DialogTitle>รีเซ็ตรหัสผ่านครู?</DialogTitle><DialogDescription className="leading-6">ต้องการตั้งรหัสผ่านของ “{teacherReset?.name}” กลับเป็นค่าเริ่มต้นของระบบใช่หรือไม่? ครูจะใช้รหัสเดิมไม่ได้หลังยืนยัน</DialogDescription></DialogHeader><DialogFooter><Button type="button" variant="outline" disabled={busy} onClick={() => setTeacherReset(null)}>ยกเลิก</Button><Button type="button" disabled={busy} onClick={() => { if (teacherReset) void onTeacherAccountChange("resetPassword", teacherReset.id).then((saved) => { if (saved) setTeacherReset(null); }); }} className="bg-[#9b3d32] hover:bg-[#7f3027]">{busy ? <LoaderCircle className="animate-spin" /> : <RefreshCw />} ยืนยันรีเซ็ตรหัส</Button></DialogFooter></DialogContent>
+      </Dialog>
       <Dialog open={Boolean(editing)} onOpenChange={(open) => { if (!open && !editorBusy) { setEditing(null); setEditorError(""); } }}>
         <DialogContent className="max-h-[88vh] overflow-y-auto sm:max-w-3xl">
           <DialogHeader><DialogTitle>แก้ไขชุดข้อสอบ</DialogTitle><DialogDescription>แก้ไขชื่อ รายละเอียด คำถาม ตัวเลือก และเฉลยได้ แล้วกดบันทึกเพื่อใช้ตรวจคะแนนอัตโนมัติ</DialogDescription></DialogHeader>
@@ -954,6 +982,13 @@ function TeacherPortal({ teacher, busy, error, exams, uploadBusy, uploadError, u
   const [file, setFile] = useState<File | null>(null);
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
+  const [profileOpen, setProfileOpen] = useState(false);
+  const [profileName, setProfileName] = useState("");
+  const [currentPassword, setCurrentPassword] = useState("");
+  const [newPassword, setNewPassword] = useState("");
+  const [profileBusy, setProfileBusy] = useState(false);
+  const [profileError, setProfileError] = useState("");
+  const [profileNotice, setProfileNotice] = useState("");
 
   if (!teacher?.authenticated) {
     return <main className="grid min-h-screen place-items-center px-4 py-8"><section className="w-full max-w-lg rounded-3xl border border-[#c7dada] bg-white p-8 shadow-[0_20px_60px_rgb(18_60_69/12%)]"><div className="grid size-12 place-items-center rounded-2xl bg-[#e6f2ef] text-[#0e5965]"><UsersRound className="size-6" /></div><h1 className="mt-5 text-2xl font-bold text-[#163c45]">{mode === "login" ? "เข้าสู่ระบบครู" : "สมัครบัญชีครู"}</h1><p className="mt-3 leading-7 text-[#5d7479]">{mode === "login" ? "บัญชีครูต้องได้รับการอนุมัติจากผู้ดูแลระบบก่อนเข้าใช้งาน" : "ส่งคำขอสมัครแล้วรอผู้ดูแลระบบอนุมัติ ก่อนจึงจะอัปโหลดข้อสอบได้"}</p><form className="mt-6 space-y-4" onSubmit={async (event) => { event.preventDefault(); if (mode === "login") { onLogin(email, password); return; } const complete = await onRegister({ name, email, password }); if (complete) { setMode("login"); setPassword(""); } }}>
@@ -966,8 +1001,38 @@ function TeacherPortal({ teacher, busy, error, exams, uploadBusy, uploadError, u
   }
 
   const examEnabled = Boolean(teacher.teacher?.examEnabled);
+  const openProfile = () => {
+    setProfileName(teacher.teacher?.name ?? "");
+    setCurrentPassword("");
+    setNewPassword("");
+    setProfileError("");
+    setProfileNotice("");
+    setProfileOpen(true);
+  };
+  const saveProfile = async () => {
+    setProfileBusy(true);
+    setProfileError("");
+    setProfileNotice("");
+    try {
+      const response = await fetch("/api/teacher/profile", { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ name: profileName, currentPassword, newPassword }) });
+      const data = await response.json() as { error?: string; message?: string };
+      if (!response.ok) throw new Error(data.error || "ไม่สามารถบันทึกข้อมูลบัญชีครูได้");
+      setCurrentPassword("");
+      setNewPassword("");
+      setProfileNotice(data.message || "บันทึกข้อมูลบัญชีครูแล้ว");
+      onRefresh();
+    } catch (saveError) {
+      setProfileError(saveError instanceof Error ? saveError.message : "ไม่สามารถบันทึกข้อมูลบัญชีครูได้");
+    } finally {
+      setProfileBusy(false);
+    }
+  };
   return <main className="min-h-screen px-4 py-8"><section className="mx-auto w-full max-w-3xl overflow-hidden rounded-3xl border border-[#c5dcda] bg-white shadow-[0_24px_70px_rgb(18_60_69/12%)]"><div className="bg-[#0e5965] px-7 py-8 text-white sm:px-10"><div className="flex items-center justify-between gap-4"><div><p className="flex items-center gap-2 text-sm font-semibold text-[#dff0ec]"><UsersRound className="size-4" /> พื้นที่ครูผู้สอน</p><h1 className="mt-3 text-3xl font-bold">{teacher.teacher?.name}</h1><p className="mt-1 text-sm text-[#dff0ec]">อัปโหลดและจัดการข้อสอบของคุณ</p></div><Button type="button" variant="secondary" onClick={onLogout}>ออกจากระบบ</Button></div></div><div className="space-y-7 p-7 sm:p-10">
     <section className={`flex flex-col gap-4 rounded-2xl border p-5 sm:flex-row sm:items-center sm:justify-between ${examEnabled ? "border-[#9acfc3] bg-[#e9f6f1]" : "border-[#e9c48e] bg-[#fff6e5]"}`}><div><h2 className="font-bold text-[#173f47]">การเปิดรับข้อสอบของฉัน</h2><p className="mt-1 text-sm leading-6 text-[#526b73]">{examEnabled ? "นักเรียนเห็นชื่อครูและเริ่มทำข้อสอบของคุณได้" : "นักเรียนจะไม่เห็นชื่อครูหรือข้อสอบของคุณ"}</p></div><div className="flex items-center gap-3"><span className={`text-sm font-semibold ${examEnabled ? "text-[#17604f]" : "text-[#8b511b]"}`}>{examEnabled ? "เปิดข้อสอบ" : "ปิดข้อสอบ"}</span><Switch checked={examEnabled} disabled={busy} onCheckedChange={onSetExamEnabled} aria-label="เปิดหรือปิดข้อสอบของฉัน" className="data-[state=checked]:bg-[#17604f]" /></div></section>
+    <section className="rounded-2xl border border-[#c7dada] bg-[#fbfefe] p-6"><div className="flex flex-col justify-between gap-4 sm:flex-row sm:items-center"><div><h2 className="text-lg font-bold text-[#173f47]">บัญชีครูของฉัน</h2><p className="mt-1 text-sm leading-6 text-[#526b73]">แก้ไขชื่อที่นักเรียนเห็น หรือเปลี่ยนรหัสผ่านบัญชีของคุณ</p></div><Button type="button" variant="outline" onClick={openProfile}><Pencil /> แก้ไขบัญชี</Button></div></section>
+    <Dialog open={profileOpen} onOpenChange={(open) => { if (!open && !profileBusy) setProfileOpen(false); }}>
+      <DialogContent className="sm:max-w-md"><DialogHeader><DialogTitle>แก้ไขบัญชีครู</DialogTitle><DialogDescription>เปลี่ยนชื่อได้ทันที หากต้องการเปลี่ยนรหัสผ่าน ให้กรอกรหัสปัจจุบันและรหัสใหม่</DialogDescription></DialogHeader><div className="space-y-4"><div className="space-y-2"><Label htmlFor="profile-teacher-name">ชื่อครู</Label><Input id="profile-teacher-name" value={profileName} maxLength={120} onChange={(event) => setProfileName(event.target.value)} /></div><div className="space-y-2"><Label htmlFor="profile-current-password">รหัสผ่านปัจจุบัน</Label><Input id="profile-current-password" type="password" value={currentPassword} onChange={(event) => setCurrentPassword(event.target.value)} placeholder="กรอกเมื่อต้องการเปลี่ยนรหัสผ่าน" /></div><div className="space-y-2"><Label htmlFor="profile-new-password">รหัสผ่านใหม่</Label><Input id="profile-new-password" type="password" minLength={8} maxLength={160} value={newPassword} onChange={(event) => setNewPassword(event.target.value)} placeholder="อย่างน้อย 8 ตัวอักษร" /></div>{profileError ? <p className="rounded-xl border border-[#e9c48e] bg-[#fff6e5] px-4 py-3 text-sm font-medium text-[#8b511b]">{profileError}</p> : null}{profileNotice ? <p className="rounded-xl border border-[#9acfc3] bg-[#e9f6f1] px-4 py-3 text-sm font-medium text-[#17604f]">{profileNotice}</p> : null}</div><DialogFooter><Button type="button" variant="outline" disabled={profileBusy} onClick={() => setProfileOpen(false)}>ยกเลิก</Button><Button type="button" disabled={profileBusy || !profileName.trim() || (Boolean(newPassword) && !currentPassword)} onClick={() => void saveProfile()} className="bg-[#0e5965]">{profileBusy ? <LoaderCircle className="animate-spin" /> : <Pencil />} บันทึกข้อมูล</Button></DialogFooter></DialogContent>
+    </Dialog>
     <CatalogExamManager />
     <section className="rounded-2xl border border-[#c7dada] bg-[#fbfefe] p-6"><div className="flex items-start gap-3"><div className="grid size-10 shrink-0 place-items-center rounded-xl bg-[#e6f2ef] text-[#0e5965]"><Upload className="size-5" /></div><div><h2 className="text-lg font-bold text-[#173f47]">อัปโหลดข้อสอบของฉัน</h2><p className="mt-1 text-sm leading-6 text-[#526b73]">นักเรียนจะเห็นชุดข้อสอบนี้เมื่อเลือกชื่อครูของคุณ</p></div></div><form className="mt-5 space-y-4" onSubmit={async (event) => { event.preventDefault(); if (!file) return; const complete = await onUpload({ file, title, description }); if (complete) { setFile(null); setTitle(""); setDescription(""); } }}><div className="space-y-2"><Label htmlFor="teacher-exam-file">ไฟล์ข้อสอบ</Label><Input id="teacher-exam-file" type="file" accept=".docx,.txt,.csv,.json" required onChange={(event) => setFile(event.target.files?.[0] ?? null)} /><p className="text-xs text-[#5d7479]">รองรับ DOCX, TXT, CSV และ JSON — ไฟล์ .doc ให้บันทึกเป็น .docx ก่อน</p></div><div className="grid gap-4 sm:grid-cols-2"><div className="space-y-2"><Label htmlFor="teacher-exam-title">ชื่อรายวิชา</Label><Input id="teacher-exam-title" value={title} onChange={(event) => setTitle(event.target.value)} placeholder="เว้นว่างเพื่อใช้ชื่อไฟล์" /></div><div className="space-y-2"><Label htmlFor="teacher-exam-description">คำอธิบาย</Label><Input id="teacher-exam-description" value={description} onChange={(event) => setDescription(event.target.value)} placeholder="เช่น สอบปลายภาค" /></div></div>{uploadError ? <p className="rounded-xl border border-[#e9c48e] bg-[#fff6e5] px-4 py-3 text-sm font-medium text-[#8b511b]">{uploadError}</p> : null}{uploadNotice ? <p className="rounded-xl border border-[#9acfc3] bg-[#e9f6f1] px-4 py-3 text-sm font-medium text-[#17604f]">{uploadNotice}</p> : null}<Button type="submit" disabled={!file || uploadBusy} className="bg-[#0e5965] hover:bg-[#094852]">{uploadBusy ? <LoaderCircle className="animate-spin" /> : <Upload />} ประมวลผลและเพิ่มข้อสอบ</Button></form></section>
     <section className="rounded-2xl border border-[#d8e5e5] bg-white p-6"><div className="flex items-center justify-between gap-3"><div><h2 className="text-lg font-bold text-[#173f47]">ข้อสอบของฉัน</h2><p className="mt-1 text-sm text-[#526b73]">นักเรียนเลือกเห็นได้เฉพาะรายการเหล่านี้</p></div><Button type="button" variant="outline" size="sm" onClick={onRefresh}><RefreshCw /> รีเฟรช</Button></div>{exams.length ? <div className="mt-4 divide-y divide-[#e0ecec]">{exams.map((item) => <div key={item.id} className="py-4 first:pt-0 last:pb-0"><p className="font-semibold text-[#173f47]">{item.title}</p><p className="mt-1 text-sm text-[#526b73]">{item.description}</p><p className="mt-1 text-xs text-[#6e8589]">{item.questionCount} ข้อ · {item.sourceFileName}</p></div>)}</div> : <p className="mt-4 rounded-xl bg-[#f3f7f7] px-4 py-3 text-sm text-[#5d7479]">ยังไม่มีข้อสอบที่อัปโหลด</p>}</section>

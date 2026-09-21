@@ -105,3 +105,17 @@ export async function setTeacherExamEnabled(id: string, enabled: boolean) {
   ).bind(enabled ? 1 : 0, id).run();
   return result.meta.changes === 1;
 }
+
+export async function updateTeacherName(id: string, name: string) {
+  const result = await database().prepare(
+    "UPDATE teacher_accounts SET name = ? WHERE id = ?",
+  ).bind(name, id).run();
+  return result.meta.changes === 1;
+}
+
+export async function updateTeacherPassword(id: string, passwordHash: string, passwordSalt: string) {
+  const result = await database().prepare(
+    "UPDATE teacher_accounts SET password_hash = ?, password_salt = ? WHERE id = ?",
+  ).bind(passwordHash, passwordSalt, id).run();
+  return result.meta.changes === 1;
+}
