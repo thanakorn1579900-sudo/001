@@ -636,7 +636,7 @@ export function ExamApp() {
                 </Button>
                 {teacherLoadError ? <p className="rounded-xl border border-[#e9c48e] bg-[#fff6e5] px-4 py-3 text-sm text-[#8b511b]">{teacherLoadError} กรุณากดเลือกครูผู้สอนเพื่อลองใหม่</p> : null}
                 {!teachersLoading && !teacherLoadError && !teachers.length ? <p className="rounded-xl border border-[#d8e5e5] bg-[#f5f9f9] px-4 py-3 text-sm text-[#526b73]">ยังไม่มีครูที่เปิดข้อสอบอยู่</p> : null}
-                <Dialog open={teacherDialogOpen} onOpenChange={(open) => { setTeacherDialogOpen(open); if (open) void refreshTeachers(); }}>
+                <Dialog open={teacherDialogOpen} onOpenChange={setTeacherDialogOpen}>
                   <DialogContent className="border-[#c7dada] sm:max-w-md">
                     <DialogHeader><DialogTitle className="flex items-center gap-2 text-[#173f47]"><UsersRound className="size-5 text-[#0e5965]" /> เลือกครูผู้สอน</DialogTitle><DialogDescription>แสดงเฉพาะครูที่ได้รับอนุมัติและเปิดข้อสอบให้นักเรียนแล้ว</DialogDescription></DialogHeader>
                     <div className="max-h-80 space-y-2 overflow-y-auto pr-1">
