@@ -1,5 +1,5 @@
-import { getExam } from "@/lib/exam-catalog";
 import { defaultExamSubjectId, isExamSubjectId } from "@/lib/exam-subjects";
+import { getCatalogExam } from "@/lib/catalog-exam-overrides";
 import { getExamEnabled } from "@/db/repository";
 import { getUploadedExam } from "@/lib/uploaded-exams";
 import { ensureThanakornTeacher, getTeacher, THANAKORN_TEACHER_ID, THANAKORN_TEACHER_NAME } from "@/lib/teacher-accounts";
@@ -26,10 +26,18 @@ const getSubjectId = (value: unknown) => typeof value === "string" ? value.trim(
 
 async function resolveExam(subjectId: string) {
   if (!isExamSubjectId(subjectId)) return getUploadedExam(subjectId);
-  const exam = getExam(subjectId);
+  const exam = await getCatalogExam(subjectId);
+  if (!exam) return null;
   return {
     ...exam,
-    subject: { ...exam.subject, teacherId: THANAKORN_TEACHER_ID, teacherName: THANAKORN_TEACHER_NAME },
+    subject: {
+      id: exam.id,
+      title: exam.title,
+      description: exam.description,
+      questionCount: exam.questionCount,
+      teacherId: THANAKORN_TEACHER_ID,
+      teacherName: THANAKORN_TEACHER_NAME,
+    },
   };
 }
 

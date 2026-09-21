@@ -65,3 +65,18 @@ export const uploadedExams = sqliteTable(
     index("idx_uploaded_exams_teacher_created").on(table.teacherId, table.createdAt),
   ],
 );
+
+export const catalogExamOverrides = sqliteTable(
+  "catalog_exam_overrides",
+  {
+    subjectId: text("subject_id").primaryKey(),
+    teacherId: text("teacher_id").notNull(),
+    title: text("title").notNull(),
+    description: text("description").notNull(),
+    questionsJson: text("questions_json").notNull(),
+    isVisible: integer("is_visible", { mode: "boolean" }).notNull().default(true),
+    createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+    updatedAt: text("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+  },
+  (table) => [index("idx_catalog_exam_overrides_teacher_visible").on(table.teacherId, table.isVisible)],
+);

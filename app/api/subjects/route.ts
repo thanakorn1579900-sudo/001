@@ -1,5 +1,5 @@
 import { getExamEnabled } from "@/db/repository";
-import { examSubjects } from "@/lib/exam-subjects";
+import { listCatalogExams } from "@/lib/catalog-exam-overrides";
 import { listUploadedExamSummaries } from "@/lib/uploaded-exams";
 import { ensureThanakornTeacher, getTeacher, THANAKORN_TEACHER_ID } from "@/lib/teacher-accounts";
 
@@ -14,7 +14,7 @@ export async function GET(request: Request) {
     const teacher = await getTeacher(teacherId);
     if (!teacher || teacher.status !== "approved" || !teacher.examEnabled) return Response.json({ error: "ครูท่านนี้ยังไม่เปิดข้อสอบ" }, { status: 423 });
     const uploaded = await listUploadedExamSummaries(teacherId);
-    return Response.json({ subjects: teacherId === THANAKORN_TEACHER_ID ? [...examSubjects, ...uploaded] : uploaded });
+    return Response.json({ subjects: teacherId === THANAKORN_TEACHER_ID ? [...await listCatalogExams(), ...uploaded] : uploaded });
   } catch {
     return Response.json({ error: "ยังโหลดรายวิชาไม่ได้" }, { status: 503 });
   }
