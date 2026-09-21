@@ -6,6 +6,7 @@ import {
   ArrowLeft,
   ArrowRight,
   CheckCircle2,
+  ChevronDown,
   CircleAlert,
   ClipboardCheck,
   Clock3,
@@ -88,6 +89,9 @@ export function ExamApp() {
   const [adminBusy, setAdminBusy] = useState(false);
   const [uploadedExams, setUploadedExams] = useState<UploadedExam[]>([]);
   const [teachers, setTeachers] = useState<Teacher[]>([]);
+  const [teachersLoading, setTeachersLoading] = useState(false);
+  const [teacherLoadError, setTeacherLoadError] = useState("");
+  const [teacherDialogOpen, setTeacherDialogOpen] = useState(false);
   const [teacherAccounts, setTeacherAccounts] = useState<Teacher[]>([]);
   const [teacher, setTeacher] = useState<TeacherStatus | null>(null);
   const [teacherExams, setTeacherExams] = useState<UploadedExam[]>([]);
@@ -129,6 +133,8 @@ export function ExamApp() {
   };
 
   const refreshTeachers = async () => {
+    setTeachersLoading(true);
+    setTeacherLoadError("");
     try {
       const response = await fetch("/api/teachers", { cache: "no-store" });
       const data = await response.json() as { teachers?: Teacher[]; error?: string };
@@ -136,8 +142,11 @@ export function ExamApp() {
       const availableTeachers = data.teachers;
       setTeachers(availableTeachers);
       setSelectedTeacherId((current) => availableTeachers.some((item) => item.id === current) ? current : availableTeachers[0]?.id || "");
-    } catch {
+    } catch (error) {
       setTeachers([]);
+      setTeacherLoadError(error instanceof Error ? error.message : "ไม่สามารถโหลดรายชื่อครูได้");
+    } finally {
+      setTeachersLoading(false);
     }
   };
 
@@ -330,10 +339,13 @@ export function ExamApp() {
 
   const chooseTeacher = (teacherId: string) => {
     setSelectedTeacherId(teacherId);
+    setTeacherDialogOpen(false);
     setSubjects([]);
     setSelectedSubjectId("");
     setExam(null);
   };
+
+  const selectedTeacher = teachers.find((item) => item.id === selectedTeacherId);
 
   const skipCurrentQuestion = () => {
     if (unansweredTarget === null) return;
@@ -619,13 +631,22 @@ export function ExamApp() {
             <form className="space-y-5" onSubmit={beginExam}>
               <div className="space-y-3">
                 <Label>เลือกครูผู้สอน</Label>
-                <RadioGroup value={selectedTeacherId} onValueChange={chooseTeacher} className="grid gap-2 sm:grid-cols-2">
-                  {teachers.map((item) => {
-                    const id = `teacher-${item.id}`;
-                    const selected = item.id === selectedTeacherId;
-                    return <label key={item.id} htmlFor={id} className={`flex cursor-pointer items-center gap-3 rounded-xl border p-3 transition ${selected ? "border-[#0e5965] bg-[#e7f4f1]" : "border-[#cfdddd] bg-white hover:border-[#95c9bf]"}`}><RadioGroupItem value={item.id} id={id} className="border-[#6d9699] text-[#0e5965]" /><span className="font-semibold text-[#173f47]">{item.name}</span></label>;
-                  })}
-                </RadioGroup>
+                <Button type="button" variant="outline" onClick={() => { setTeacherDialogOpen(true); void refreshTeachers(); }} className="h-auto w-full justify-between border-[#a6c9c5] bg-white px-4 py-3 text-left hover:bg-[#f4fbfa]">
+                  <span className="flex min-w-0 items-center gap-3"><UsersRound className="size-5 shrink-0 text-[#0e5965]" /><span className="min-w-0"><span className="block text-xs font-medium text-[#5d7479]">ครูผู้สอนที่เลือก</span><span className="block truncate text-base font-semibold text-[#173f47]">{selectedTeacher?.name ?? (teachersLoading ? "กำลังโหลดรายชื่อครู…" : "กดเพื่อเลือกครูผู้สอน")}</span></span></span><ChevronDown className="size-5 shrink-0 text-[#0e5965]" />
+                </Button>
+                {teacherLoadError ? <p className="rounded-xl border border-[#e9c48e] bg-[#fff6e5] px-4 py-3 text-sm text-[#8b511b]">{teacherLoadError} กรุณากดเลือกครูผู้สอนเพื่อลองใหม่</p> : null}
+                {!teachersLoading && !teacherLoadError && !teachers.length ? <p className="rounded-xl border border-[#d8e5e5] bg-[#f5f9f9] px-4 py-3 text-sm text-[#526b73]">ยังไม่มีครูที่เปิดข้อสอบอยู่</p> : null}
+                <Dialog open={teacherDialogOpen} onOpenChange={(open) => { setTeacherDialogOpen(open); if (open) void refreshTeachers(); }}>
+                  <DialogContent className="border-[#c7dada] sm:max-w-md">
+                    <DialogHeader><DialogTitle className="flex items-center gap-2 text-[#173f47]"><UsersRound className="size-5 text-[#0e5965]" /> เลือกครูผู้สอน</DialogTitle><DialogDescription>แสดงเฉพาะครูที่ได้รับอนุมัติและเปิดข้อสอบให้นักเรียนแล้ว</DialogDescription></DialogHeader>
+                    <div className="max-h-80 space-y-2 overflow-y-auto pr-1">
+                      {teachersLoading ? <div className="flex items-center gap-3 rounded-xl bg-[#f3f7f7] px-4 py-5 text-sm text-[#526b73]"><LoaderCircle className="size-5 animate-spin text-[#0e5965]" />กำลังโหลดรายชื่อครู…</div> : null}
+                      {!teachersLoading && teachers.map((item) => <button key={item.id} type="button" onClick={() => chooseTeacher(item.id)} className={`flex w-full items-center justify-between gap-4 rounded-xl border px-4 py-4 text-left transition ${item.id === selectedTeacherId ? "border-[#0e5965] bg-[#e7f4f1]" : "border-[#d4e1e2] bg-white hover:border-[#95c9bf] hover:bg-[#f6fbfa]"}`}><span><span className="block font-semibold text-[#173f47]">{item.name}</span><span className="mt-1 block text-sm text-[#526b73]">กดเพื่อเลือกข้อสอบของครูท่านนี้</span></span>{item.id === selectedTeacherId ? <CheckCircle2 className="size-5 shrink-0 text-[#17604f]" /> : <ChevronDown className="size-5 shrink-0 -rotate-90 text-[#6d9699]" />}</button>)}
+                      {!teachersLoading && !teachers.length ? <p className="rounded-xl bg-[#f5f9f9] px-4 py-5 text-center text-sm leading-6 text-[#526b73]">ยังไม่มีรายชื่อครูที่เปิดข้อสอบ<br />ครูต้องได้รับการอนุมัติและเปิดสวิตช์ข้อสอบก่อน</p> : null}
+                    </div>
+                    <DialogFooter><Button type="button" variant="outline" onClick={() => setTeacherDialogOpen(false)}>ปิด</Button></DialogFooter>
+                  </DialogContent>
+                </Dialog>
               </div>
               <div className="space-y-3">
                 <Label>เลือกวิชาสอบ</Label>
