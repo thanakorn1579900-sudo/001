@@ -20,6 +20,7 @@ type DraftQuestion = { number: number; question: string[]; options: UploadedOpti
 const thaiLabels = ["ก", "ข", "ค", "ง", "จ", "ฉ"];
 const decode = new TextDecoder();
 const acceptedLabels = "กขคงจฉA-Fa-f1-6";
+const numberCharacters = "0-9๐-๙";
 // Private-use markers survive DOCX-to-text conversion without appearing in saved questions.
 const markedStart = "\uE000";
 const markedEnd = "\uE001";
@@ -30,6 +31,12 @@ function withoutMarkers(value: string) {
 
 function isMarked(value: string) {
   return value.includes(markedStart);
+}
+
+function questionNumber(value: string) {
+  const arabic = value.replace(/[๐-๙]/g, (digit) => String("๐๑๒๓๔๕๖๗๘๙".indexOf(digit)));
+  const number = Number(arabic);
+  return Number.isInteger(number) && number > 0 && number <= 999 ? number : 0;
 }
 
 function text(value: unknown, maxLength = 2_000) {
@@ -158,21 +165,33 @@ function lineOption(line: string) {
 }
 
 function lineQuestion(line: string) {
-  return withoutMarkers(line).trim().match(/^\s*(?:ข้อ(?:ที่)?\s*)?(\d{1,3})\s*(?:[.)、:：\-]\s*|\s+)(.+)$/i);
+  const cleaned = withoutMarkers(line).trim();
+  const explicit = cleaned.match(new RegExp(`^\\s*(ข้อ(?:ที่)?\\s*)[\\[(]?\\s*([${numberCharacters}]{1,3})\\s*(?:(?:[.)\\]、:：\\-]+)\\s*|\\s+|(?=[ก-๙]))(.+)$`, "i"));
+  if (explicit) {
+    const number = questionNumber(explicit[2]);
+    return number ? { number, question: text(explicit[3]), explicit: true } : null;
+  }
+  const plain = cleaned.match(new RegExp(`^\\s*[\\[(]?\\s*([${numberCharacters}]{1,3})\\s*(?:[.)\\]、:：\\-]+\\s*|\\s+)(.+)$`, "i"));
+  if (!plain) return null;
+  const number = questionNumber(plain[1]);
+  return number ? { number, question: text(plain[2]), explicit: false } : null;
 }
 
 function answerMapFrom(source: string) {
   const answers = new Map<number, string>();
   const compact = withoutMarkers(source).replace(/\r/g, "\n");
-  const keyed = new RegExp(`(?:ข้อ\\s*)?(\\d{1,3})\\s*(?:[.)、:：\\-=]|\\s)*\\s*(?:เฉลย|คำตอบ|answer|correct)?\\s*[:：\\-]?\\s*\\(?\\s*([${acceptedLabels}])\\s*\\)?(?=$|[\\s,;|])`, "gi");
-  for (const match of compact.matchAll(keyed)) answers.set(Number(match[1]), optionLabel(match[2], 0));
+  const keyed = new RegExp(`(?:ข้อ(?:ที่)?\\s*)?([${numberCharacters}]{1,3})\\s*(?:[.)、:：\\-=]|\\s)*\\s*(?:เฉลย|คำตอบ|answer|ans\\.?|correct)?\\s*[:：\\-]?\\s*\\(?\\s*([${acceptedLabels}])\\s*\\)?(?:\\s*[.)、:：\\-])?(?=$|[\\s,;|])`, "gi");
+  for (const match of compact.matchAll(keyed)) {
+    const number = questionNumber(match[1]);
+    if (number) answers.set(number, optionLabel(match[2], 0));
+  }
   return answers;
 }
 
 function parseText(source: string, fileName: string, sourceFormat: "TXT" | "DOCX" = "TXT"): ParsedUpload {
   const clean = decodeEntities(source.replace(/\r/g, "").replace(/\u00a0/g, " "));
   const lines = clean.split("\n").map((line) => line.trim()).filter(Boolean);
-  const answerStart = lines.findIndex((line) => /^(?:(?:เฉลย|คำตอบ)(?:\s|[:：\-]|$)|answer(?:\s*key)?\b|correct\s*answers?\b)/i.test(withoutMarkers(line)));
+  const answerStart = lines.findIndex((line) => /^(?:(?:เฉลย|คำตอบ)(?:\s|[:：\-]|แบบ|ข้อ|รวม|$)|answer(?:\s*key)?\b|correct\s*answers?\b)/i.test(withoutMarkers(line)));
   const questionLines = answerStart >= 0 ? lines.slice(0, answerStart) : lines;
   const answerLines = answerStart >= 0 ? lines.slice(answerStart) : [];
   const answers = answerMapFrom(answerLines.join("\n"));
@@ -198,20 +217,29 @@ function parseText(source: string, fileName: string, sourceFormat: "TXT" | "DOCX
     const inline = cleanLine.match(new RegExp(`(?:เฉลย|คำตอบ|answer|ans\\.?|correct)\\s*[:：\\-]?\\s*\\(?\\s*([${acceptedLabels}])`, "i"));
     if (current && inline) { current.inlineAnswer = optionLabel(inline[1], 0); continue; }
     const option = lineOption(line);
+    const header = lineQuestion(line);
+    const expectedOptionNumber = current ? current.options.length + 1 : 0;
+    const hasReliableCurrentAnswer = Boolean(current && (current.inlineAnswer || answers.get(current.number) || current.markedAnswers.length === 1));
+    const startsNewQuestion = Boolean(header && (!current
+      || !option
+      || !option.numeric
+      || Number(option.label) !== expectedOptionNumber
+      || header.explicit
+      || (header.number === current.number + 1 && current.options.length >= 2 && hasReliableCurrentAnswer)));
+    if (header && startsNewQuestion) {
+      finish();
+      candidates += 1;
+      current = { number: header.number, question: [header.question], options: [], markedAnswers: [] };
+      continue;
+    }
     if (current && option) {
-      const expectedNumber = current.options.length + 1;
-      if (!option.numeric || Number(option.label) === expectedNumber) {
+      if (!option.numeric || Number(option.label) === expectedOptionNumber) {
         current.options.push({ label: option.label, text: option.text });
         if (option.marked && !current.markedAnswers.includes(option.label)) current.markedAnswers.push(option.label);
         continue;
       }
     }
-    const header = lineQuestion(line);
-    if (header) {
-      finish();
-      candidates += 1;
-      current = { number: Number(header[1]), question: [header[2]], options: [], markedAnswers: [] };
-    } else if (current && !option) {
+    if (current && !option) {
       current.question.push(line);
     }
   }
