@@ -27,6 +27,24 @@ export const appSettings = sqliteTable("app_settings", {
   updatedAt: text("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
 });
 
+export const teacherAccounts = sqliteTable(
+  "teacher_accounts",
+  {
+    id: text("id").primaryKey(),
+    name: text("name").notNull(),
+    email: text("email").notNull(),
+    passwordHash: text("password_hash").notNull(),
+    passwordSalt: text("password_salt").notNull(),
+    status: text("status").notNull().default("pending"),
+    createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+    approvedAt: text("approved_at"),
+  },
+  (table) => [
+    uniqueIndex("uq_teacher_accounts_email").on(table.email),
+    index("idx_teacher_accounts_status").on(table.status),
+  ],
+);
+
 export const uploadedExams = sqliteTable(
   "uploaded_exams",
   {
@@ -35,9 +53,13 @@ export const uploadedExams = sqliteTable(
     description: text("description").notNull(),
     sourceFileName: text("source_file_name").notNull(),
     sourceObjectKey: text("source_object_key").notNull(),
+    teacherId: text("teacher_id").notNull().default("system"),
     questionCount: integer("question_count").notNull(),
     questionsJson: text("questions_json").notNull(),
     createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
   },
-  (table) => [index("idx_uploaded_exams_created_at").on(table.createdAt)],
+  (table) => [
+    index("idx_uploaded_exams_created_at").on(table.createdAt),
+    index("idx_uploaded_exams_teacher_created").on(table.teacherId, table.createdAt),
+  ],
 );

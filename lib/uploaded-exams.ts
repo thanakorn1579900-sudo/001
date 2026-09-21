@@ -6,12 +6,14 @@ export type UploadedExamSummary = {
   id: string;
   title: string;
   description: string;
+  teacherId: string;
+  teacherName: string;
   questionCount: number;
   sourceFileName: string;
   createdAt: string;
 };
 
-type StoredExamRow = UploadedExamSummary & { questionsJson: string };
+type StoredExamRow = Omit<UploadedExamSummary, "teacherName"> & { questionsJson: string };
 type StoredAdminExamRow = StoredExamRow & { sourceObjectKey: string };
 
 function database() {
@@ -55,16 +57,17 @@ export function normalizeUploadedQuestions(value: unknown): UploadedQuestion[] |
   }
 }
 
-export async function listUploadedExamSummaries(): Promise<UploadedExamSummary[]> {
-  const result = await database()
-    .prepare("SELECT id, title, description, question_count AS questionCount, source_file_name AS sourceFileName, created_at AS createdAt FROM uploaded_exams ORDER BY created_at DESC")
-    .all<UploadedExamSummary>();
+export async function listUploadedExamSummaries(teacherId?: string): Promise<UploadedExamSummary[]> {
+  const statement = teacherId
+    ? database().prepare("SELECT e.id, e.title, e.description, e.teacher_id AS teacherId, COALESCE(t.name, 'ครูธนากร สมปาน') AS teacherName, e.question_count AS questionCount, e.source_file_name AS sourceFileName, e.created_at AS createdAt FROM uploaded_exams e LEFT JOIN teacher_accounts t ON t.id = e.teacher_id WHERE e.teacher_id = ? ORDER BY e.created_at DESC").bind(teacherId)
+    : database().prepare("SELECT e.id, e.title, e.description, e.teacher_id AS teacherId, COALESCE(t.name, 'ครูธนากร สมปาน') AS teacherName, e.question_count AS questionCount, e.source_file_name AS sourceFileName, e.created_at AS createdAt FROM uploaded_exams e LEFT JOIN teacher_accounts t ON t.id = e.teacher_id ORDER BY e.created_at DESC");
+  const result = await statement.all<UploadedExamSummary>();
   return result.results ?? [];
 }
 
 export async function getUploadedExam(id: string) {
   const row = await database()
-    .prepare("SELECT id, title, description, question_count AS questionCount, source_file_name AS sourceFileName, created_at AS createdAt, questions_json AS questionsJson FROM uploaded_exams WHERE id = ? LIMIT 1")
+    .prepare("SELECT id, title, description, teacher_id AS teacherId, question_count AS questionCount, source_file_name AS sourceFileName, created_at AS createdAt, questions_json AS questionsJson FROM uploaded_exams WHERE id = ? LIMIT 1")
     .bind(id)
     .first<StoredExamRow>();
   if (!row) return null;
@@ -84,7 +87,7 @@ export async function getUploadedExam(id: string) {
 
 export async function getUploadedExamForAdmin(id: string) {
   const row = await database()
-    .prepare("SELECT id, title, description, question_count AS questionCount, source_file_name AS sourceFileName, created_at AS createdAt, source_object_key AS sourceObjectKey, questions_json AS questionsJson FROM uploaded_exams WHERE id = ? LIMIT 1")
+    .prepare("SELECT id, title, description, teacher_id AS teacherId, question_count AS questionCount, source_file_name AS sourceFileName, created_at AS createdAt, source_object_key AS sourceObjectKey, questions_json AS questionsJson FROM uploaded_exams WHERE id = ? LIMIT 1")
     .bind(id)
     .first<StoredAdminExamRow>();
   if (!row) return null;
@@ -98,16 +101,18 @@ export async function saveUploadedExam(input: {
   description: string;
   sourceFileName: string;
   sourceObjectKey: string;
+  teacherId?: string;
   questions: UploadedQuestion[];
 }) {
   await database()
-    .prepare("INSERT INTO uploaded_exams (id, title, description, source_file_name, source_object_key, question_count, questions_json, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)")
+    .prepare("INSERT INTO uploaded_exams (id, title, description, source_file_name, source_object_key, teacher_id, question_count, questions_json, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)")
     .bind(
       input.id,
       input.title,
       input.description,
       input.sourceFileName,
       input.sourceObjectKey,
+      input.teacherId ?? "system",
       input.questions.length,
       JSON.stringify(input.questions),
     )

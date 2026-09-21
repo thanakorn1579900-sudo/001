@@ -15,6 +15,13 @@
       "when": 1789877870429,
       "tag": "0001_daily_crystal",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1789990342809,
+      "tag": "0002_abnormal_lucky_pierre",
+      "breakpoints": true
     }
   ]
 }
